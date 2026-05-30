@@ -10,50 +10,48 @@
 {% endblock %}
 
 {% block main %}
-  {# ---------------- Experiment summary (top) ---------------- #}
-  <section class="wide exp-summary">
-    <h2>Experiment — {{ selected_instance.name if selected_instance else g.instance.name }}
-      ({{ selected_instance.version if selected_instance else g.instance.version }})</h2>
-    {% if experiment_hypothesis %}
-      <p>{{ experiment_hypothesis }}</p>
-    {% else %}
-      <p class="muted">No experiment description on file.</p>
-    {% endif %}
-    {% if experiment_properties %}
-      <ul class="exp-props">
-        {% for p in experiment_properties %}
-          <li>{{ p }}</li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-  </section>
+  {# ---------------- Experiment summary + next invocation (top row, 2fr / 1fr) ---------------- #}
+  <div class="toprow">
+    <section class="exp-summary">
+      <h2>Experiment — {{ selected_instance.name if selected_instance else g.instance.name }}
+        ({{ selected_instance.version if selected_instance else g.instance.version }})</h2>
+      {% if experiment_hypothesis %}
+        <p>{{ experiment_hypothesis }}</p>
+      {% else %}
+        <p class="muted">No experiment description on file.</p>
+      {% endif %}
+      {% if experiment_properties %}
+        <ul class="exp-props">
+          {% for p in experiment_properties %}
+            <li>{{ p }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
 
-  {# ---------------- Status ---------------- #}
-  <section>
-    <h2>Status</h2>
-    <pre>{{ status.detail or '—' }}</pre>
-    <div style="margin-top: 10px;">
-      <div class="label" style="font-size: 10px; text-transform: uppercase; color: var(--muted);">
-        next invocation
-      </div>
+    <section>
+      <h2>Next invocation</h2>
+      {% if status.state == 'running' %}<span class="pill ok">running</span>
+      {% elif status.state == 'scheduled' %}<span class="pill ok">scheduled</span>
+      {% elif status.state == 'stale' %}<span class="pill warn">stale</span>
+      {% else %}<span class="pill muted">{{ status.state }}</span>{% endif %}
       {% if next_fire_epoch_ms %}
         <div id="countdown"
              data-target-ms="{{ next_fire_epoch_ms }}"
-             style="font-size: 22px; font-weight: 600; color: var(--accent); margin-top: 2px;">
+             style="font-size: 22px; font-weight: 600; color: var(--accent); margin-top: 8px;">
           —
         </div>
         <div class="ts" id="countdown-target">{{ next_fire_iso|fmt_dt }}</div>
       {% else %}
-        <div style="font-size: 16px; color: var(--muted); margin-top: 2px;">
-          {% if status.state == 'running' %}
-            (session in progress)
-          {% else %}
-            not scheduled
-          {% endif %}
+        <div style="font-size: 16px; color: var(--muted); margin-top: 8px;">
+          {% if status.state == 'running' %}(session in progress){% else %}not scheduled{% endif %}
         </div>
       {% endif %}
-    </div>
-  </section>
+      {% if status.state != 'scheduled' and status.detail %}
+        <div class="small" style="margin-top: 8px;">{{ status.detail }}</div>
+      {% endif %}
+    </section>
+  </div>
 
   {% if next_fire_epoch_ms %}
   <script>

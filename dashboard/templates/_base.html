@@ -89,6 +89,15 @@
     overflow: hidden;
   }
   section.wide { grid-column: 1 / -1; }
+  /* Top row: experiment summary (2/3) beside the next-invocation block (1/3). */
+  .toprow {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+  }
+  .toprow > section { margin: 0; }
+  @media (max-width: 720px) { .toprow { grid-template-columns: 1fr; } }
   h2 {
     font-size: 12px;
     text-transform: uppercase;
