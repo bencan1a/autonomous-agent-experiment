@@ -4,7 +4,7 @@ Each instance's cron entry is addressed by a tagged comment on the line ABOVE
 the entry::
 
     # agent-instance:<id>
-    47 2 30 5 * cd /home/claudebot/agent && ./venv/bin/python orchestrator.py --instance <id> >> instances/<id>/logs/orchestrator.log 2>&1
+    47 2 30 5 * cd /path/to/agent && ./venv/bin/python orchestrator.py --instance <id> >> instances/<id>/logs/orchestrator.log 2>&1
 
 Strategy: the orchestrator removes its own instance's entry FIRST THING each
 wake, then re-installs a one-shot entry at the agent's chosen future minute when

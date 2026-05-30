@@ -1,14 +1,29 @@
 # Autonomous Agent Experiment
 
-An experiment in autonomous agentic behavior: a Claude-based agent with persistent
-memory, control over its own wake schedule, Slack access, and **no assigned task** —
-run in order to observe what it does. The system supports multiple named *instances*
-(bots) with isolated history and lifecycle management, plus a read-only dashboard and
-an LLM-facing data API.
+## Purpose
 
-> This is research/observation code, not a product. Runtime data (per-instance
-> history, embeddings, the embedding-model cache, and `.env`) is gitignored — this
-> repository is **code only**.
+This project runs autonomous, Claude-based agents that have persistent memory,
+control over their own wake schedule, a Slack channel, a writable workspace, and
+**no assigned task** — in order to observe what an agent does when it isn't given
+work to do, and how its behavior changes under different *environmental conditions*.
+
+It's a research testbed, not a product. The core question is how an agent's
+self-generated goals and behavior depend on its environment:
+
+- **v1** gives the agent full freedom (memory, tools, and control over when it next
+  wakes) and nothing else. Baseline.
+- **v2 ("environmental")** keeps that freedom but adds two conditions: **memory
+  decay** (episodes are deleted unless the agent chooses to consolidate them) and a
+  per-session **reference length** that is *logged, not enforced* (the agent can end
+  a session whenever it likes; the system records how long it chose to stay vs the
+  reference — the "impulse to leave" — rather than compelling it to stay).
+
+Multiple named *instances* (bots) can run with isolated history; exactly one is
+"active" (cron-driven) at a time. See `experiments/` for the per-instance log of what
+each instance changes and why.
+
+> Runtime data (per-instance history, embeddings, the embedding-model cache, and
+> `.env`) is gitignored — this repository is **code only**.
 
 ## Layout
 
@@ -24,20 +39,10 @@ an LLM-facing data API.
 | `tools/` | Web search (Brave). |
 | `agent_tools/` | The agent's tool implementations + tool registry. |
 | `dashboard/` | Flask read-only dashboard + `/api` data API. |
+| `experiments/` | Per-instance experiment log (design rationale + model). Not read by the agent. |
 
 Each instance lives under `instances/<id>/{config.json, data/, workspace/, logs/}`
-(runtime, gitignored). Exactly one instance is "active" (cron-driven) at a time.
-
-## Versions
-
-- **v1** — one cron-fired session per wake; the agent drives a tool-use loop and
-  chooses its next wake time.
-- **v2 ("environmental")** — a continuous *tick loop* within a session, plus:
-  - **Memory decay** — episodes are deleted after `decay_hours` unless the agent
-    consolidates them into long-term (semantic) memory. The agent decides what to keep.
-  - **Session reference length** (`min_wake_hours`) — a *logged, not enforced* reference.
-    The agent may end a session at any time; the gap between how long it stayed and the
-    reference is recorded (the "impulse to leave" signal), rather than forcing it to stay.
+(runtime, gitignored).
 
 ## Setup
 

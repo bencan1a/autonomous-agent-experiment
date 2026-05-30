@@ -166,8 +166,9 @@ def format_episode_for_observer(
 
 if __name__ == "__main__":
     import os
+    from pathlib import Path
     from dotenv import load_dotenv
-    load_dotenv("/home/claudebot/agent/.env")
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     client = SlackClient(
         bot_token=os.environ["SLACK_BOT_TOKEN"],
         agent_channel_id=os.environ["SLACK_AGENT_CHANNEL_ID"],

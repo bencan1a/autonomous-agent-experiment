@@ -51,8 +51,9 @@ class BraveSearch:
 
 if __name__ == "__main__":
     import os
+    from pathlib import Path
     from dotenv import load_dotenv
-    load_dotenv("/home/claudebot/agent/.env")
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     s = BraveSearch(os.environ["BRAVE_API_KEY"])
     for r in s.search("anthropic claude api"):
         print(f"- {r.title}\n  {r.url}\n  {r.description[:120]}")

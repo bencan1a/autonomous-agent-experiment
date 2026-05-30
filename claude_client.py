@@ -144,8 +144,9 @@ class ClaudeClient:
 
 
 if __name__ == "__main__":
+    from pathlib import Path
     from dotenv import load_dotenv
-    load_dotenv("/home/claudebot/agent/.env")
+    load_dotenv(Path(__file__).resolve().parent / ".env")
     client = ClaudeClient(
         api_key=os.environ["ANTHROPIC_API_KEY"],
         model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7"),

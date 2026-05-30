@@ -5,9 +5,9 @@ load, NO real crontab. Everything external is monkeypatched. EpisodicStore is
 REAL (sqlite) pointed at a temp instance dir.
 
 Run:
-    cd /home/claudebot/agent && ./venv/bin/python -m pytest tests/test_v2_session.py -q
+    ./venv/bin/python -m pytest tests/test_v2_session.py -q
     (or, if pytest is unavailable)
-    cd /home/claudebot/agent && ./venv/bin/python tests/test_v2_session.py
+    ./venv/bin/python tests/test_v2_session.py
 """
 
 from __future__ import annotations
