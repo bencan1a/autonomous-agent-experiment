@@ -109,5 +109,10 @@ points an external agent at it.
   defaults to the same model.
 - **Runtime data is gitignored** (`.env`, `data/`, `instances/`, `registry.json`,
   `logs/`, `venv/`). The repo is code-only.
+- **Slack is per-instance.** Each instance owns three channels (`<id>-notes`,
+  `<id>-mirror`, `<id>-chat`), provisioned by `instance_manager` (`communications/
+  slack_provisioning.py`) and stored in `config.json`'s `slack` block — not in `.env`.
+  The `-chat` channel is the two-way agent↔operator channel (it replaced the DM);
+  `SlackClient.dm_ben`/`fetch_dms_from_ben` keep their names but target that channel.
 - **`experiments/<id>.md`** documents each instance's design + model; the agent never
-  reads it (it can only see its own workspace, memory, and inbound DMs).
+  reads it (it can only see its own workspace, memory, and inbound chat-channel messages).

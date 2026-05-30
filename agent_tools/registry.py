@@ -157,7 +157,7 @@ TOOLS_SPEC: list[dict[str, Any]] = [
     },
     {
         "name": "dm_ben",
-        "description": "Send a direct Slack message to Ben.",
+        "description": "Send Ben a message in your shared conversation channel.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -283,7 +283,7 @@ _END_TICK_SPEC: dict[str, Any] = {
             "tick_focus": {"type": "string", "description": "What this tick was about."},
             "internal_state": {"type": "string", "description": "Optional note on your internal state."},
             "journal_entry": {"type": "string", "description": "Optional text to post to your Slack channel."},
-            "slack_to_ben": {"type": "string", "description": "Optional direct message to Ben."},
+            "slack_to_ben": {"type": "string", "description": "Optional message to Ben in your shared conversation channel."},
             "capability_request": {
                 "type": "object",
                 "properties": {

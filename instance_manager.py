@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import cron_control as cron
 from instances_common import (
+    AGENT_ROOT,
     Instance,
     default_config,
     instance_dir,
@@ -28,6 +30,18 @@ from instances_common import (
     save_registry,
     VALID_VERSIONS,
 )
+
+# Load the shared .env so Slack token / Ben user id are available for the
+# slack-provision / slack-archive subcommands. Guard if python-dotenv or the
+# file is missing — the Slack subcommands will then fail with a clear message.
+try:
+    from dotenv import load_dotenv
+
+    _env_path = AGENT_ROOT / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path)
+except Exception:
+    pass
 
 
 def _err(msg: str) -> int:
@@ -89,6 +103,62 @@ def _activate(registry: dict, instance_id: str, minutes_from_now: int) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# slack helpers
+# --------------------------------------------------------------------------- #
+
+def _slack_creds() -> tuple[str, str]:
+    """Return (bot_token, ben_user_id) from the environment or raise."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    ben = os.environ.get("SLACK_BEN_USER_ID")
+    if not token or not ben:
+        raise RuntimeError(
+            "SLACK_BOT_TOKEN and SLACK_BEN_USER_ID must be set in .env"
+        )
+    return token, ben
+
+
+def _provision_and_save(instance_id: str, *, private: bool) -> dict[str, str | None]:
+    """Provision the three channels for an instance and persist their ids into
+    the instance's config.json ``slack`` block. Returns the channel-id dict.
+
+    Raises on missing creds or a hard Slack failure (caller reports / exits).
+    """
+    from communications.slack_provisioning import provision_instance_channels
+
+    token, ben = _slack_creds()
+    channels = provision_instance_channels(
+        bot_token=token,
+        instance_id=instance_id,
+        ben_user_id=ben,
+        private=private,
+    )
+    inst = load_instance(instance_id)
+    slack_block = inst.config.get("slack")
+    if not isinstance(slack_block, dict):
+        slack_block = {}
+    slack_block.update(channels)
+    inst.config["slack"] = slack_block
+    save_config(instance_id, inst.config)
+    return channels
+
+
+def _archive_slack_channels(instance_id: str) -> dict[str, str]:
+    """Archive the three channels recorded in an instance's slack block."""
+    from communications.slack_provisioning import archive_instance_channels
+
+    token, _ = _slack_creds()
+    inst = load_instance(instance_id)
+    slack_block = inst.config.get("slack") or {}
+    channel_ids = [
+        slack_block.get("notes_channel"),
+        slack_block.get("mirror_channel"),
+        slack_block.get("chat_channel"),
+    ]
+    channel_ids = [c for c in channel_ids if c]
+    return archive_instance_channels(bot_token=token, channel_ids=channel_ids)
+
+
+# --------------------------------------------------------------------------- #
 # subcommands
 # --------------------------------------------------------------------------- #
 
@@ -121,6 +191,24 @@ def cmd_create(args: argparse.Namespace) -> int:
     save_registry(registry)
 
     print(f"created instance: {instance_id}")
+
+    # Best-effort: provision the three Slack channels now. If scopes aren't yet
+    # granted (or any other Slack error), the instance is still created with
+    # null channel ids and the operator can run slack-provision later.
+    try:
+        channels = _provision_and_save(instance_id, private=False)
+        print("provisioned Slack channels:")
+        for k, v in channels.items():
+            print(f"  {k}: {v}")
+    except Exception as exc:  # noqa: BLE001 — provisioning is best-effort here
+        print(
+            f"warning: could not provision Slack channels: {exc}\n"
+            "  The instance was created with null channels. To provision later:\n"
+            "    1. Ensure the Slack app has scopes: channels:manage, channels:history\n"
+            "       (plus groups:write/groups:history for private channels), then reinstall the app.\n"
+            f"    2. Run: instance_manager.py slack-provision {instance_id}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -192,6 +280,12 @@ def cmd_archive(args: argparse.Namespace) -> int:
     _set_lifecycle(registry, args.id, status="archived", active=False)
     save_registry(registry)
     print(f"archived '{args.id}' (data retained)")
+
+    # Best-effort: archive the instance's Slack channels too.
+    try:
+        _archive_slack_channels(args.id)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(f"warning: could not archive Slack channels: {exc}", file=sys.stderr)
     return 0
 
 
@@ -249,6 +343,50 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_slack_provision(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    if registry_entry(registry, args.id) is None:
+        return _err(f"no such instance: {args.id}")
+    try:
+        load_instance(args.id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    try:
+        channels = _provision_and_save(args.id, private=args.private)
+    except Exception as exc:  # noqa: BLE001
+        return _err(
+            f"Slack provisioning failed: {exc}\n"
+            "  Ensure the Slack app has scopes channels:manage, channels:history "
+            "(and groups:write/groups:history for private channels), then reinstall "
+            "the app and retry."
+        )
+    print(f"provisioned Slack channels for '{args.id}':")
+    for k, v in channels.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+def cmd_slack_archive(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    if registry_entry(registry, args.id) is None:
+        return _err(f"no such instance: {args.id}")
+    try:
+        load_instance(args.id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    try:
+        status = _archive_slack_channels(args.id)
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"Slack archive failed: {exc}")
+    if not status:
+        print(f"no Slack channels recorded for '{args.id}' (nothing to archive)")
+        return 0
+    print(f"archived Slack channels for '{args.id}':")
+    for cid, st in status.items():
+        print(f"  {cid}: {st}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
@@ -294,6 +432,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_archive = sub.add_parser("archive", help="archive an instance (data retained)")
     p_archive.add_argument("id", help="instance id")
     p_archive.set_defaults(func=cmd_archive)
+
+    p_provision = sub.add_parser(
+        "slack-provision", help="create/reuse the instance's three Slack channels"
+    )
+    p_provision.add_argument("id", help="instance id")
+    p_provision.add_argument(
+        "--private", action="store_true", help="create private channels"
+    )
+    p_provision.set_defaults(func=cmd_slack_provision)
+
+    p_archive_slack = sub.add_parser(
+        "slack-archive", help="archive the instance's Slack channels"
+    )
+    p_archive_slack.add_argument("id", help="instance id")
+    p_archive_slack.set_defaults(func=cmd_slack_archive)
 
     p_show = sub.add_parser("show", help="inspect an instance")
     p_show.add_argument("id", help="instance id")

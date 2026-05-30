@@ -187,6 +187,11 @@ def default_config(
         "weekly_cost_cap_usd": 300,
         "max_tool_calls_per_session": 500,
         "max_session_wall_clock_seconds": 14400,
+        "slack": {
+            "notes_channel": None,
+            "mirror_channel": None,
+            "chat_channel": None,
+        },
     }
     if version == "v2":
         cfg.update({

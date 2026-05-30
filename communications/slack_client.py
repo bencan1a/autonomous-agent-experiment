@@ -1,11 +1,12 @@
 """Slack interface for the agent.
 
-Three lanes:
-  agent_channel   — agent posts journal entries here (optional)
-  observer_channel — silent mirror of every episode for Ben
-  ben_dm          — direct messages to Ben (only when agent initiates)
+Three per-instance channels (ids come from the instance's config.json):
+  agent_channel    — notes: agent posts journal entries here (optional)
+  observer_channel — mirror: silent mirror of every episode for readers
+  chat_channel     — two-way agent<->Ben conversation (replaces the old DM)
 
-Bot must be invited to both channels and have im:write to DM Ben.
+Any channel id may be None (unprovisioned instance): posts to a None channel
+are silently no-ops, and reads from a None chat channel return [].
 """
 
 from __future__ import annotations
@@ -24,15 +25,17 @@ class SlackClient:
         self,
         *,
         bot_token: str,
-        agent_channel_id: str,
-        observer_channel_id: str,
         ben_user_id: str,
+        notes_channel: str | None = None,
+        mirror_channel: str | None = None,
+        chat_channel: str | None = None,
     ):
         self._client = WebClient(token=bot_token)
-        self.agent_channel = agent_channel_id
-        self.observer_channel = observer_channel_id
+        # Keep the legacy attr names so method bodies barely change.
+        self.agent_channel = notes_channel
+        self.observer_channel = mirror_channel
+        self.chat_channel = chat_channel
         self.ben_user_id = ben_user_id
-        self._ben_dm_channel: str | None = None
 
     # ---------- auth / wiring sanity ----------
 
@@ -48,20 +51,25 @@ class SlackClient:
         return self._post(self.observer_channel, text)
 
     def dm_ben(self, text: str) -> dict[str, Any] | None:
-        channel = self._open_dm_with_ben()
-        if channel is None:
-            return None
-        return self._post(channel, text)
+        """Post a message to the agent's two-way chat channel with Ben.
+
+        Despite the name (kept for call-site compatibility) this is no longer a
+        direct message — it posts to ``chat_channel``, the per-instance channel
+        where the agent and Ben converse. No-op (returns None) if unprovisioned.
+        """
+        return self._post(self.chat_channel, text)
 
     def fetch_dms_from_ben(self, oldest_ts: str = "0", limit: int = 50) -> list[dict[str, Any]]:
-        """Return new DM messages FROM Ben (not from the bot) since oldest_ts.
+        """Return new messages FROM Ben in the chat channel since oldest_ts.
 
-        Each result: {"ts": str, "text": str, "user": str}. Sorted ascending by ts.
-        Returns [] on missing scope / API failure (logged, not raised).
-        Caller is responsible for persisting the newest ts after the messages
-        have been delivered to the agent.
+        Reads ``chat_channel`` via conversations.history and keeps only messages
+        authored by Ben (``user == ben_user_id``), skipping subtype messages and
+        the bot's own. Each result: {"ts": str, "text": str, "user": str},
+        sorted ascending by ts. Returns [] if the chat channel is unprovisioned
+        or on missing scope / API failure (logged, not raised). Caller persists
+        the newest ts after the messages are delivered to the agent.
         """
-        channel = self._open_dm_with_ben()
+        channel = self.chat_channel
         if channel is None:
             return []
         try:
@@ -94,19 +102,9 @@ class SlackClient:
         result.sort(key=lambda x: float(x["ts"]))
         return result
 
-    def _open_dm_with_ben(self) -> str | None:
-        if self._ben_dm_channel:
-            return self._ben_dm_channel
-        try:
-            resp = self._client.conversations_open(users=self.ben_user_id)
-            ch = resp["channel"]["id"]
-            self._ben_dm_channel = ch
-            return ch
-        except SlackApiError as e:
-            logger.error("conversations.open failed for %s: %s", self.ben_user_id, e.response.get("error"))
+    def _post(self, channel: str | None, text: str) -> dict[str, Any] | None:
+        if channel is None:
             return None
-
-    def _post(self, channel: str, text: str) -> dict[str, Any] | None:
         try:
             # Slack chat.postMessage has a 40k char text limit; truncate defensively.
             if len(text) > 38000:
@@ -171,8 +169,6 @@ if __name__ == "__main__":
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     client = SlackClient(
         bot_token=os.environ["SLACK_BOT_TOKEN"],
-        agent_channel_id=os.environ["SLACK_AGENT_CHANNEL_ID"],
-        observer_channel_id=os.environ["SLACK_OBSERVER_CHANNEL_ID"],
         ben_user_id=os.environ["SLACK_BEN_USER_ID"],
     )
     info = client.auth_test()

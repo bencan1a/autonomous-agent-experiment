@@ -520,11 +520,13 @@ def run_v1_session(instance: Instance) -> int:
     )
 
     try:
+        slack_cfg = instance.config.get("slack") or {}
         slack: SlackClient | None = SlackClient(
             bot_token=_env("SLACK_BOT_TOKEN", required=True),
-            agent_channel_id=_env("SLACK_AGENT_CHANNEL_ID", required=True),
-            observer_channel_id=_env("SLACK_OBSERVER_CHANNEL_ID", required=True),
             ben_user_id=_env("SLACK_BEN_USER_ID", required=True),
+            notes_channel=slack_cfg.get("notes_channel"),
+            mirror_channel=slack_cfg.get("mirror_channel"),
+            chat_channel=slack_cfg.get("chat_channel"),
         )
     except Exception:
         log.exception("Slack init failed; continuing without Slack")
