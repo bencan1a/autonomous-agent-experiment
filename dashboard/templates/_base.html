@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+{% block head_extra %}{% endblock %}
+<title>{% block title %}Autonomous Agent — Dashboard{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #161b22;
+    --border: #2a313a;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #58a6ff;
+    --warn: #d29922;
+    --bad: #f85149;
+    --ok: #3fb950;
+    /* tool-category chip colors (subtle backgrounds, full-opacity borders) */
+    --cat-file:    #1f2c44;
+    --cat-file-b:  #2a4170;
+    --cat-web:     #3a2a18;
+    --cat-web-b:   #6b4623;
+    --cat-memory:  #2c1f3f;
+    --cat-memory-b:#4d2f73;
+    --cat-comms:   #1b3326;
+    --cat-comms-b: #2a5c3f;
+    --cat-control: #3a1f1f;
+    --cat-control-b:#6b2e2e;
+    --cat-subagent:#3a3318;
+    --cat-subagent-b:#6b5e23;
+    --cat-other:   #20262e;
+    --cat-other-b: #3a414b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header h1 a { color: inherit; }
+  header .meta { color: var(--muted); font-size: 11px; }
+  header nav { font-size: 11px; }
+  header nav a { margin-left: 10px; color: var(--muted); }
+  header nav a:hover { color: var(--accent); }
+  header .instance-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+  header .instance-bar select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 11px;
+  }
+  header .instance-bar .cost { color: var(--muted); }
+  header .instance-bar .cost .num { color: var(--accent); font-weight: 600; }
+  main {
+    padding: 16px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    overflow: hidden;
+  }
+  section.wide { grid-column: 1 / -1; }
+  h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  h3 {
+    font-size: 12px;
+    margin: 0 0 8px;
+    color: var(--text);
+    font-weight: 600;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    font-size: 12px;
+  }
+  th { color: var(--muted); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  .pill.muted { color: var(--muted); }
+  .pill.dim { color: var(--ok); opacity: 0.6; border-color: var(--ok); }
+  .num { color: var(--accent); font-weight: 600; }
+  pre {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+  }
+  details > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  details[open] > summary { margin-bottom: 6px; }
+  .focus { color: var(--accent); }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .stat {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  .stat .label { font-size: 10px; text-transform: uppercase; color: var(--muted); }
+  .stat .value { font-size: 18px; font-weight: 600; color: var(--text); }
+  .bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .bar > div { height: 100%; background: var(--accent); }
+  .bar > div.warn { background: var(--warn); }
+  .bar > div.bad { background: var(--bad); }
+  .journal {
+    border-left: 2px solid var(--accent);
+    padding: 6px 10px;
+    margin: 6px 0;
+    background: #0a0d12;
+    border-radius: 0 4px 4px 0;
+  }
+  .ts { color: var(--muted); font-size: 11px; }
+  .twocol {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 16px;
+  }
+  /* tool-name chips */
+  .tool {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    border-left: 3px solid var(--cat-other-b);
+    background: var(--cat-other);
+    color: var(--text);
+  }
+  .tool.cat-file    { background: var(--cat-file);    border-left-color: var(--cat-file-b); }
+  .tool.cat-web     { background: var(--cat-web);     border-left-color: var(--cat-web-b); }
+  .tool.cat-memory  { background: var(--cat-memory);  border-left-color: var(--cat-memory-b); }
+  .tool.cat-comms   { background: var(--cat-comms);   border-left-color: var(--cat-comms-b); }
+  .tool.cat-control { background: var(--cat-control); border-left-color: var(--cat-control-b); }
+  .tool.cat-subagent{ background: var(--cat-subagent);border-left-color: var(--cat-subagent-b); }
+  .err { color: var(--bad); }
+  .small { font-size: 11px; color: var(--muted); }
+  .truncate {
+    display: inline-block;
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  .nowrap { white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="{{ url_for('index') }}{{ ('?instance=' ~ selected_instance.id) if selected_instance else '' }}">autonomous agent · dashboard</a></h1>
+  {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
+  <nav>
+    <a href="{{ url_for('index') }}{{ iq }}">overview</a>
+    <a href="{{ url_for('workspace_index') }}{{ iq }}">workspace</a>
+    <a href="{{ url_for('actions_log') }}{{ iq }}">actions</a>
+    <a href="{{ url_for('subagents_log') }}{{ iq }}">subagents</a>
+    <a href="{{ url_for('claude_md_view') }}{{ iq }}">CLAUDE.md</a>
+    <a href="{{ url_for('prompt_view') }}{{ iq }}">prompt</a>
+  </nav>
+  {% if instances %}
+  <form class="instance-bar" method="get" action="{{ request.path }}">
+    <label for="instance-select" class="small">instance:</label>
+    <select id="instance-select" name="instance" onchange="this.form.submit()">
+      {% for inst in instances %}
+        <option value="{{ inst.id }}"
+          {% if selected_instance and inst.id == selected_instance.id %}selected{% endif %}>
+          {{ inst.name }} ({{ inst.status }}){% if inst.active %} ★{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="small">switch</button>
+    {% if selected_instance %}
+      {% set ist = selected_instance.status %}
+      {% if ist == 'active' %}
+        <span class="pill ok">{{ ist }}</span>
+      {% elif ist == 'paused' %}
+        <span class="pill warn">{{ ist }}</span>
+      {% elif ist == 'archived' %}
+        <span class="pill muted">{{ ist }}</span>
+      {% else %}
+        <span class="pill">{{ ist or '—' }}</span>
+      {% endif %}
+      <span class="cost">cost <span class="num">${{ '%.2f'|format(instance_cost_total or 0.0) }}</span></span>
+    {% endif %}
+  </form>
+  {% endif %}
+  <div class="meta">
+    {% if status %}
+      {% if status.state == 'running' %}
+        <span class="pill ok">● {{ status.label or 'running' }}</span>
+      {% elif status.state == 'stale' %}
+        <span class="pill bad">⚠ stale (process died)</span>
+      {% elif status.state == 'scheduled' %}
+        <span class="pill dim">● scheduled</span>
+      {% elif status.state == 'stopped' %}
+        <span class="pill muted">○ stopped</span>
+      {% else %}
+        <span class="pill warn">{{ status.state }}</span>
+      {% endif %}
+    {% endif %}
+    {% block header_meta %}{% endblock %}
+    &nbsp; {{ now }}
+  </div>
+</header>
+
+<main>
+  {% block main %}{% endblock %}
+</main>
+</body>
+</html>

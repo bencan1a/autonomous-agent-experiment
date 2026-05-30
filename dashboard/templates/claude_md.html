@@ -1,0 +1,63 @@
+{% extends "_base.html" %}
+
+{% block title %}CLAUDE.md history — dashboard{% endblock %}
+
+{% block header_meta %}
+  &nbsp; CLAUDE.md
+{% endblock %}
+
+{% block main %}
+  <section class="wide">
+    <h2>CLAUDE.md — current</h2>
+    <div class="small" style="margin-bottom: 6px;">
+      Path: <code>{{ claude_md_path }}</code>
+      {% if claude_md_size is not none %} · size: {{ claude_md_size }} bytes{% endif %}
+    </div>
+    {% if claude_md_current %}
+      <pre>{{ claude_md_current }}</pre>
+    {% else %}
+      <div class="empty">Agent has not written a CLAUDE.md.</div>
+    {% endif %}
+  </section>
+
+  <section class="wide">
+    <h2>History <span class="small">(last {{ history|length }} snapshots, newest first)</span></h2>
+    {% if history %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">id</th>
+            <th style="width:170px">timestamp</th>
+            <th style="width:90px">when</th>
+            <th style="width:60px">sess</th>
+            <th style="width:80px; text-align:right;">size</th>
+            <th>content</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for h in history %}
+          <tr>
+            <td class="ts">{{ h.id }}</td>
+            <td class="ts">{{ h.timestamp|fmt_dt }}</td>
+            <td class="ts">{{ h.timestamp|relative_time }}</td>
+            <td>
+              {% if h.session_id %}
+                <a href="{{ url_for('session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
+              {% else %}—{% endif %}
+            </td>
+            <td style="text-align:right;">{{ h.size }}</td>
+            <td>
+              <details>
+                <summary>view snapshot</summary>
+                <pre>{{ h.content }}</pre>
+              </details>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No history yet.</div>
+    {% endif %}
+  </section>
+{% endblock %}

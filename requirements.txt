@@ -1,0 +1,17 @@
+anthropic>=0.40.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Memory
+sentence-transformers>=3.0.0
+torch>=2.4.0
+einops>=0.7.0
+lancedb>=0.13.0
+pyarrow>=15.0.0
+numpy<2.0
+
+# Comms
+slack_sdk>=3.27.0
+
+# Dashboard
+flask>=3.0.0

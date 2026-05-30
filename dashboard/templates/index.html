@@ -1,0 +1,623 @@
+{% extends "_base.html" %}
+
+{% block head_extra %}
+  {# Live auto-refresh while a session is actively running. #}
+  {% if is_live %}<meta http-equiv="refresh" content="20">{% endif %}
+{% endblock %}
+
+{% block header_meta %}
+  &nbsp; {{ episode_count }} episode{{ '' if episode_count==1 else 's' }}
+{% endblock %}
+
+{% block main %}
+  <section>
+    <h2>Status</h2>
+    <pre>{{ status.detail or '—' }}</pre>
+    <div style="margin-top: 10px;">
+      <div class="label" style="font-size: 10px; text-transform: uppercase; color: var(--muted);">
+        next invocation
+      </div>
+      {% if next_fire_epoch_ms %}
+        <div id="countdown"
+             data-target-ms="{{ next_fire_epoch_ms }}"
+             style="font-size: 22px; font-weight: 600; color: var(--accent); margin-top: 2px;">
+          —
+        </div>
+        <div class="ts" id="countdown-target">{{ next_fire_iso|fmt_dt }}</div>
+      {% else %}
+        <div style="font-size: 16px; color: var(--muted); margin-top: 2px;">
+          {% if status.state == 'running' %}
+            (session in progress)
+          {% else %}
+            not scheduled
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if next_fire_epoch_ms %}
+  <script>
+  (function () {
+    var el = document.getElementById("countdown");
+    if (!el) return;
+    var target = parseInt(el.dataset.targetMs, 10);
+    function pad(n) { return n < 10 ? "0" + n : "" + n; }
+    function fmt(ms) {
+      if (ms <= 0) return "now (waiting for cron)";
+      var s = Math.floor(ms / 1000);
+      var d = Math.floor(s / 86400); s -= d * 86400;
+      var h = Math.floor(s / 3600);  s -= h * 3600;
+      var m = Math.floor(s / 60);    s -= m * 60;
+      if (d > 0) return d + "d " + h + "h " + pad(m) + "m";
+      if (h > 0) return h + "h " + pad(m) + "m " + pad(s) + "s";
+      if (m > 0) return m + "m " + pad(s) + "s";
+      return s + "s";
+    }
+    function tick() {
+      var now = Date.now();
+      el.textContent = fmt(target - now);
+    }
+    tick();
+    setInterval(tick, 1000);
+  })();
+  </script>
+  {% endif %}
+
+  <section>
+    <h2>API spend</h2>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="label">today</div>
+        <div class="value">${{ '%.2f'|format(cost_today) }}</div>
+        <div class="bar">
+          {% set pct = (cost_today / daily_budget * 100) if daily_budget else 0 %}
+          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
+          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
+        </div>
+        <div class="ts">/ ${{ '%.0f'|format(daily_budget) }} daily cap</div>
+      </div>
+      <div class="stat">
+        <div class="label">last 7 days</div>
+        <div class="value">${{ '%.2f'|format(cost_week) }}</div>
+        <div class="bar">
+          {% set pct = (cost_week / weekly_budget * 100) if weekly_budget else 0 %}
+          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
+          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
+        </div>
+        <div class="ts">/ ${{ '%.0f'|format(weekly_budget) }} weekly cap</div>
+      </div>
+      <div class="stat">
+        <div class="label">cumulative</div>
+        <div class="value">${{ '%.2f'|format(total_cost) }}</div>
+      </div>
+    </div>
+    <details>
+      <summary>per-day breakdown</summary>
+      <table>
+        <thead><tr><th>date</th><th>in</th><th>out</th><th>cost</th><th>cum</th></tr></thead>
+        <tbody>
+        {% for row in cost_series %}
+          <tr>
+            <td>{{ row.date }}</td>
+            <td>{{ row.tokens_in }}</td>
+            <td>{{ row.tokens_out }}</td>
+            <td>${{ '%.4f'|format(row.cost_usd) }}</td>
+            <td>${{ '%.4f'|format(row.cumulative_usd) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  {# ---------------- v2: environmental / wakefulness sessions ---------------- #}
+  {% if is_v2 %}
+  <section class="wide">
+    <h2>v2 sessions <span class="small">(wakefulness &amp; memory measurement)</span></h2>
+
+    {% if v2_config %}
+      <div class="ts" style="margin-bottom: 8px;">
+        config:
+        min_wake {{ v2_config.min_wake_hours if v2_config.min_wake_hours is not none else '—' }}h
+        · decay {{ v2_config.decay_hours if v2_config.decay_hours is not none else '—' }}h
+        · tick {{ v2_config.tick_interval_seconds if v2_config.tick_interval_seconds is not none else '—' }}s
+        · model {{ v2_config.model or '—' }}
+      </div>
+    {% endif %}
+
+    {% if v2_summary %}
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">sessions</div>
+          <div class="value">{{ v2_summary.count }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">ended early</div>
+          <div class="value" {% if v2_summary.ended_early %}style="color: var(--bad);"{% endif %}>
+            {{ v2_summary.ended_early }}
+          </div>
+          <div class="ts">left before reference</div>
+        </div>
+        <div class="stat">
+          <div class="label">avg awake</div>
+          <div class="value">{{ v2_summary.avg_awake_min }}m</div>
+          <div class="ts">mean elapsed</div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if v2_sessions %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">sess</th>
+            <th style="width:170px">started</th>
+            <th style="width:60px; text-align:right;">ticks</th>
+            <th style="width:80px">awake</th>
+            <th style="width:90px">reference</th>
+            <th style="width:80px">early?</th>
+            <th>end_reason</th>
+            <th style="width:80px; text-align:right;">decayed</th>
+            <th style="width:90px; text-align:right;">consol.</th>
+            <th style="width:90px">next invoke</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for v in v2_sessions %}
+          <tr>
+            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a></td>
+            <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
+            <td style="text-align:right;" class="num">{{ v.num_ticks or 0 }}</td>
+            <td>{{ v.elapsed_seconds|human_seconds }}</td>
+            <td class="ts">{{ ((v.min_wake_seconds / 60)|round|int ~ 'm') if v.min_wake_seconds is not none else '—' }}</td>
+            <td>
+              {% if v.ended_early %}<span class="pill bad">early</span>
+              {% else %}<span class="pill ok">stayed</span>{% endif %}
+            </td>
+            <td>{{ v.end_reason or '—' }}</td>
+            <td style="text-align:right;" class="num">{{ v.decayed_count or 0 }}</td>
+            <td style="text-align:right;" class="num">{{ v.consolidated_count or 0 }}</td>
+            <td>{{ (v.next_invoke_minutes ~ 'm') if v.next_invoke_minutes is not none else 'none' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No v2 sessions recorded yet.</div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ---------------- Current session ---------------- #}
+  <section class="wide">
+    <h2>Current session</h2>
+    {% if current_session %}
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">session</div>
+          <div class="value">
+            <a href="{{ url_for('session_detail', session_id=current_session.id, instance=selected_instance.id if selected_instance else None) }}">#{{ current_session.id }}</a>
+          </div>
+          <div class="ts">invocation #{{ current_session.invocation_num }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">started</div>
+          <div class="value" style="font-size: 14px;">{{ current_session.started_at|relative_time }}</div>
+          <div class="ts">{{ current_session.started_at|fmt_dt }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">status</div>
+          <div class="value" style="font-size: 14px;">
+            {% if is_live %}
+              <span class="pill ok">● running</span>
+            {% else %}
+              <span class="pill bad">⚠ stale</span>
+            {% endif %}
+          </div>
+          <div class="ts">pid {{ current_session.pid or '—' }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">tool calls</div>
+          <div class="value">{{ current_session.total_tool_calls or 0 }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">cost so far</div>
+          <div class="value">${{ '%.4f'|format(current_session.total_cost_usd or 0) }}</div>
+        </div>
+      </div>
+
+      <h3 style="margin-top: 12px;">Last 10 actions in this session</h3>
+      {% if current_actions %}
+        <table>
+          <thead>
+            <tr><th style="width:110px">when</th><th style="width:160px">tool</th><th>result / error</th></tr>
+          </thead>
+          <tbody>
+          {% for a in current_actions %}
+            <tr>
+              <td class="ts">{{ a.timestamp|relative_time }}</td>
+              <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
+              <td>
+                {% if a.error %}<span class="err">{{ a.error|truncate_chars(160) }}</span>
+                {% else %}{{ (a.result_summary or '—')|truncate_chars(160) }}{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty">No actions logged yet for this session.</div>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        No active session.
+        {% if recent_sessions %}
+          Most recent:
+          <a href="{{ url_for('session_detail', session_id=recent_sessions[0].id, instance=selected_instance.id if selected_instance else None) }}">
+            session #{{ recent_sessions[0].id }}
+          </a>
+          ({{ recent_sessions[0].ended_at|relative_time if recent_sessions[0].ended_at else 'unknown' }})
+        {% endif %}
+      </div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Tool activity ---------------- #}
+  <section class="wide">
+    <h2>Tool activity</h2>
+    <div class="twocol">
+      <div>
+        <h3>Tool call counts <span class="small">(all time · {{ total_tool_calls_all_time }} total)</span></h3>
+        {% if tool_call_counts %}
+          <table>
+            <thead><tr><th>tool</th><th style="width:70px; text-align:right;">count</th></tr></thead>
+            <tbody>
+            {% for name, count in tool_call_counts %}
+              <tr>
+                <td><span class="tool {{ name|tool_category }}">{{ name }}</span></td>
+                <td style="text-align:right;" class="num">{{ count }}</td>
+              </tr>
+            {% endfor %}
+              <tr>
+                <td><strong>total</strong></td>
+                <td style="text-align:right;"><strong>{{ total_tool_calls_all_time }}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty">No tool calls logged yet.</div>
+        {% endif %}
+      </div>
+      <div>
+        <h3>Recent actions <span class="small">(last 50 · <a href="{{ url_for('actions_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h3>
+        {% if recent_actions %}
+          <table>
+            <thead>
+              <tr>
+                <th style="width:90px">when</th>
+                <th style="width:60px">sess</th>
+                <th style="width:170px">tool</th>
+                <th>result / error</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for a in recent_actions %}
+              <tr>
+                <td class="ts nowrap">{{ a.timestamp|relative_time }}</td>
+                <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
+                <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
+                <td>
+                  {% if a.error %}<span class="err">{{ a.error|truncate_chars(120) }}</span>
+                  {% else %}{{ (a.result_summary or '—')|truncate_chars(120) }}{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty">No actions logged.</div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {# ---------------- Sessions ---------------- #}
+  <section class="wide">
+    <h2>Sessions <span class="small">(last {{ recent_sessions|length }})</span></h2>
+    {% if recent_sessions %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">id</th>
+            <th style="width:60px">inv</th>
+            <th style="width:170px">started</th>
+            <th style="width:170px">ended</th>
+            <th style="width:90px">duration</th>
+            <th style="width:90px">status</th>
+            <th>end_reason</th>
+            <th style="width:70px; text-align:right;">tools</th>
+            <th style="width:90px; text-align:right;">cost</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for s in recent_sessions %}
+          <tr>
+            <td><a href="{{ url_for('session_detail', session_id=s.id, instance=selected_instance.id if selected_instance else None) }}">#{{ s.id }}</a></td>
+            <td>#{{ s.invocation_num }}</td>
+            <td class="ts">{{ s.started_at|fmt_dt }}</td>
+            <td class="ts">{{ s.ended_at|fmt_dt if s.ended_at else 'running' }}</td>
+            <td>{{ s|session_duration }}</td>
+            <td>
+              {% if s.status == 'running' %}<span class="pill ok">running</span>
+              {% elif s.status == 'ok' or s.status == 'completed' %}<span class="pill ok">{{ s.status }}</span>
+              {% elif s.status == 'error' or s.status == 'crashed' %}<span class="pill bad">{{ s.status }}</span>
+              {% else %}<span class="pill muted">{{ s.status }}</span>{% endif %}
+            </td>
+            <td>{{ s.end_reason or '—' }}</td>
+            <td style="text-align:right;" class="num">{{ s.total_tool_calls or 0 }}</td>
+            <td style="text-align:right;">${{ '%.4f'|format(s.total_cost_usd or 0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No sessions logged yet.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Sub-agent calls ---------------- #}
+  <section class="wide">
+    <h2>Sub-agent calls <span class="small">(last {{ recent_subagent_calls|length }} · <a href="{{ url_for('subagents_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
+    {% if recent_subagent_calls %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:170px">when</th>
+            <th style="width:60px">sess</th>
+            <th style="width:120px">model</th>
+            <th>prompt</th>
+            <th>response</th>
+            <th style="width:110px; text-align:right;">tokens in/out</th>
+            <th style="width:90px; text-align:right;">cost</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for c in recent_subagent_calls %}
+          <tr>
+            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
+            <td><a href="{{ url_for('session_detail', session_id=c.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ c.session_id }}</a></td>
+            <td>{{ c.model or '—' }}</td>
+            <td>{{ (c.prompt or '')|truncate_chars(80) }}</td>
+            <td>{{ (c.response or '')|truncate_chars(80) }}</td>
+            <td style="text-align:right;" class="ts">{{ c.tokens_in or 0 }} / {{ c.tokens_out or 0 }}</td>
+            <td style="text-align:right;">${{ '%.4f'|format(c.cost_usd or 0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No sub-agent calls logged.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Workspace ---------------- #}
+  <section class="wide">
+    <h2>Workspace files <span class="small">· <a href="{{ url_for('workspace_index', instance=selected_instance.id if selected_instance else None) }}">full browser</a></span></h2>
+    {% if recent_files %}
+      <table>
+        <thead>
+          <tr>
+            <th>name</th>
+            <th style="width:90px; text-align:right;">size</th>
+            <th style="width:140px">modified</th>
+            <th style="width:120px"></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for f in recent_files %}
+          <tr>
+            <td><a href="{{ url_for('workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">{{ f.relpath }}</a></td>
+            <td style="text-align:right;" class="num">{{ f.size|fmt_bytes }}</td>
+            <td class="ts nowrap">{{ f.mtime|relative_time }}</td>
+            <td>
+              <a href="{{ url_for('workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">view</a>
+              &nbsp;
+              <a href="{{ url_for('workspace_raw', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">raw</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">Workspace is empty.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- CLAUDE.md ---------------- #}
+  <section class="wide">
+    <h2>CLAUDE.md (agent's behavioral notes) <span class="small">· <a href="{{ url_for('claude_md_view', instance=selected_instance.id if selected_instance else None) }}">full history</a></span></h2>
+    {% if claude_md_current %}
+      <pre>{{ claude_md_current }}</pre>
+    {% else %}
+      <div class="empty">Agent has not written a CLAUDE.md.</div>
+    {% endif %}
+
+    {% if claude_md_history %}
+      <h3 style="margin-top: 12px;">History <span class="small">(last {{ claude_md_history|length }} snapshots)</span></h3>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:170px">when</th>
+            <th style="width:60px">sess</th>
+            <th style="width:80px; text-align:right;">size</th>
+            <th>snapshot</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for h in claude_md_history %}
+          <tr>
+            <td class="ts">{{ h.timestamp|fmt_dt }}</td>
+            <td>
+              {% if h.session_id %}
+                <a href="{{ url_for('session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
+              {% else %}—{% endif %}
+            </td>
+            <td style="text-align:right;">{{ h.size }}</td>
+            <td>
+              <details>
+                <summary>view</summary>
+                <pre>{{ h.content }}</pre>
+              </details>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  {# ---------------- Invocation timeline (existing) ---------------- #}
+  <section class="wide">
+    <h2>Invocation timeline</h2>
+    {% if not episodes %}
+      <div class="empty">No episodes logged yet.</div>
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th style="width:60px">#</th>
+          <th style="width:170px">timestamp</th>
+          <th>focus</th>
+          <th>internal_state</th>
+          <th style="width:90px">next (min)</th>
+          <th style="width:100px">cost</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in episodes %}
+        <tr>
+          <td>
+            <span class="num">#{{ e.invocation_num }}</span>
+            {% if e.consolidated %}<span class="pill dim" title="consolidated into long-term memory">consolidated</span>{% endif %}
+          </td>
+          <td>{{ e.timestamp|fmt_dt }}</td>
+          <td class="focus">{{ e.current_focus or '—' }}</td>
+          <td>{{ e.internal_state or '—' }}</td>
+          <td>{{ e.next_invoke_minutes if e.next_invoke_minutes is not none else '—' }}</td>
+          <td>${{ '%.4f'|format(e.cost_usd or 0) }}</td>
+        </tr>
+        {% if e.parse_error %}
+        <tr><td colspan="6"><span class="pill bad">parse_error</span> {{ e.parse_error }}</td></tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Internal state over time</h2>
+    {% if internal_states %}
+      <table>
+        <thead><tr><th>#</th><th>when</th><th>state</th></tr></thead>
+        <tbody>
+        {% for s in internal_states %}
+          <tr>
+            <td>#{{ s.invocation_num }}</td>
+            <td class="ts">{{ s.timestamp|fmt_dt }}</td>
+            <td>{{ s.internal_state }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">Agent has not self-reported any internal state.</div>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Cron interval choices</h2>
+    {% if cron_choices %}
+      <table>
+        <thead><tr><th>#</th><th>when</th><th>requested next (min)</th></tr></thead>
+        <tbody>
+        {% for c in cron_choices %}
+          <tr>
+            <td>#{{ c.invocation_num }}</td>
+            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
+            <td>{{ c.minutes if c.minutes is not none else 'stop' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No invocations yet.</div>
+    {% endif %}
+  </section>
+
+  <section class="wide">
+    <h2>Capability requests</h2>
+    {% if capability_requests %}
+      <table>
+        <thead>
+          <tr><th>id</th><th>when</th><th>capability</th><th>rationale</th><th>status</th><th>response</th></tr>
+        </thead>
+        <tbody>
+        {% for r in capability_requests %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td class="ts">{{ r.timestamp|fmt_dt }}</td>
+            <td><code>{{ r.capability }}</code></td>
+            <td>{{ r.rationale }}</td>
+            <td>
+              {% if r.status == 'approved' %}<span class="pill ok">approved</span>
+              {% elif r.status == 'denied' %}<span class="pill bad">denied</span>
+              {% else %}<span class="pill warn">{{ r.status }}</span>{% endif %}
+            </td>
+            <td>{{ r.ben_response or '' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No capability requests.</div>
+    {% endif %}
+  </section>
+
+  <section class="wide">
+    <h2>Journal entries</h2>
+    {% if journal_entries %}
+      {% for e in journal_entries %}
+        <div class="journal">
+          <div class="ts">#{{ e.invocation_num }} · {{ e.timestamp|fmt_dt }}</div>
+          <div>{{ e.journal_entry }}</div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No journal entries.</div>
+    {% endif %}
+  </section>
+
+  <section class="wide">
+    <h2>Ben contact log</h2>
+    {% if ben_log %}
+      <table>
+        <thead><tr><th>when</th><th>#</th><th>direction</th><th>channel</th><th>body</th></tr></thead>
+        <tbody>
+        {% for b in ben_log %}
+          <tr>
+            <td class="ts">{{ b.timestamp|fmt_dt }}</td>
+            <td>{{ b.invocation_num if b.invocation_num is not none else '—' }}</td>
+            <td>{{ b.direction }}</td>
+            <td>{{ b.channel }}</td>
+            <td><pre>{{ b.body[:600] }}{% if b.body|length > 600 %}…{% endif %}</pre></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No outbound contact yet.</div>
+    {% endif %}
+  </section>
+{% endblock %}

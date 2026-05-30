@@ -1,0 +1,192 @@
+{% extends "_base.html" %}
+
+{% block title %}Session #{{ session.id }} — dashboard{% endblock %}
+
+{% block head_extra %}
+  {% if is_live %}<meta http-equiv="refresh" content="20">{% endif %}
+{% endblock %}
+
+{% block header_meta %}
+  &nbsp; session #{{ session.id }}
+{% endblock %}
+
+{% block main %}
+  <section class="wide">
+    <h2>Session #{{ session.id }}</h2>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="label">invocation</div>
+        <div class="value">#{{ session.invocation_num }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">status</div>
+        <div class="value" style="font-size: 14px;">
+          {% if is_live %}
+            <span class="pill ok">● running</span>
+          {% elif session.status == 'running' %}
+            <span class="pill bad">⚠ stale</span>
+          {% elif session.status in ('ok', 'completed') %}
+            <span class="pill ok">{{ session.status }}</span>
+          {% elif session.status in ('error', 'crashed') %}
+            <span class="pill bad">{{ session.status }}</span>
+          {% else %}
+            <span class="pill muted">{{ session.status }}</span>
+          {% endif %}
+        </div>
+        <div class="ts">pid {{ session.pid or '—' }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">started</div>
+        <div class="value" style="font-size: 14px;">{{ session.started_at|relative_time }}</div>
+        <div class="ts">{{ session.started_at|fmt_dt }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">ended</div>
+        <div class="value" style="font-size: 14px;">
+          {% if session.ended_at %}{{ session.ended_at|relative_time }}
+          {% else %}<span class="ts">— still running</span>{% endif %}
+        </div>
+        <div class="ts">{{ session.ended_at|fmt_dt if session.ended_at else '' }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">duration</div>
+        <div class="value">{{ duration }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">tool calls</div>
+        <div class="value">{{ session.total_tool_calls or 0 }}</div>
+      </div>
+      <div class="stat">
+        <div class="label">cost (session)</div>
+        <div class="value">${{ '%.4f'|format(session.total_cost_usd or 0) }}</div>
+        {% if session_cost and session_cost != (session.total_cost_usd or 0) %}
+          <div class="ts">w/ subagents: ${{ '%.4f'|format(session_cost) }}</div>
+        {% endif %}
+      </div>
+    </div>
+    {% if session.end_reason %}
+      <h3 style="margin-top: 12px;">End reason</h3>
+      <pre>{{ session.end_reason }}</pre>
+    {% endif %}
+  </section>
+
+  {% if linked_episode %}
+    <section class="wide">
+      <h2>Linked episode <span class="small">(invocation #{{ linked_episode.invocation_num }})</span></h2>
+      <table>
+        <tbody>
+          <tr><th style="width:160px">timestamp</th><td>{{ linked_episode.timestamp|fmt_dt }}</td></tr>
+          <tr><th>current_focus</th><td class="focus">{{ linked_episode.current_focus or '—' }}</td></tr>
+          <tr><th>internal_state</th><td>{{ linked_episode.internal_state or '—' }}</td></tr>
+          <tr><th>journal_entry</th><td>{{ linked_episode.journal_entry or '—' }}</td></tr>
+          <tr><th>decisions_made</th><td>{{ linked_episode.decisions_made or '—' }}</td></tr>
+          <tr><th>actions_taken</th><td><pre>{{ linked_episode.actions_taken|fmt_json }}</pre></td></tr>
+          <tr><th>next_invoke_minutes</th><td>{{ linked_episode.next_invoke_minutes if linked_episode.next_invoke_minutes is not none else '—' }}</td></tr>
+          <tr><th>tokens in/out</th><td>{{ linked_episode.tokens_in or 0 }} / {{ linked_episode.tokens_out or 0 }}</td></tr>
+          <tr><th>cost</th><td>${{ '%.4f'|format(linked_episode.cost_usd or 0) }}</td></tr>
+          <tr><th>wall_clock_seconds</th><td>{{ linked_episode.wall_clock_seconds if linked_episode.wall_clock_seconds is not none else '—' }}</td></tr>
+          {% if linked_episode.parse_error %}
+          <tr><th>parse_error</th><td><span class="pill bad">{{ linked_episode.parse_error }}</span></td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% if linked_episode.raw_output %}
+        <details style="margin-top: 8px;">
+          <summary>raw_output</summary>
+          <pre>{{ linked_episode.raw_output }}</pre>
+        </details>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section class="wide">
+    <h2>Actions <span class="small">({{ actions|length }})</span></h2>
+    {% if actions %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">#</th>
+            <th style="width:170px">timestamp</th>
+            <th style="width:170px">tool</th>
+            <th>args / result</th>
+            <th style="width:80px; text-align:right;">duration</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for a in actions %}
+          <tr>
+            <td class="ts">{{ loop.index }}</td>
+            <td class="ts">{{ a.timestamp|fmt_dt }}</td>
+            <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
+            <td>
+              {% if a.args_json %}
+                <details>
+                  <summary>args</summary>
+                  <pre>{{ a.args_json|fmt_json }}</pre>
+                </details>
+              {% endif %}
+              {% if a.error %}
+                <div class="err">{{ a.error }}</div>
+              {% else %}
+                <div>{{ a.result_summary or '—' }}</div>
+              {% endif %}
+            </td>
+            <td style="text-align:right;" class="ts">{{ a.duration_ms|duration }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No actions logged for this session.</div>
+    {% endif %}
+  </section>
+
+  <section class="wide">
+    <h2>Sub-agent calls <span class="small">({{ subagent_calls|length }})</span></h2>
+    {% if subagent_calls %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:170px">when</th>
+            <th style="width:120px">model</th>
+            <th>prompt / response</th>
+            <th style="width:110px; text-align:right;">tokens</th>
+            <th style="width:90px; text-align:right;">cost</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for c in subagent_calls %}
+          <tr>
+            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
+            <td>{{ c.model or '—' }}</td>
+            <td>
+              {% if c.system_prompt %}
+                <details>
+                  <summary>system</summary>
+                  <pre>{{ c.system_prompt }}</pre>
+                </details>
+              {% endif %}
+              {% if c.prompt %}
+                <details open>
+                  <summary>prompt</summary>
+                  <pre>{{ c.prompt }}</pre>
+                </details>
+              {% endif %}
+              {% if c.response %}
+                <details>
+                  <summary>response</summary>
+                  <pre>{{ c.response }}</pre>
+                </details>
+              {% endif %}
+            </td>
+            <td style="text-align:right;" class="ts">{{ c.tokens_in or 0 }} / {{ c.tokens_out or 0 }}</td>
+            <td style="text-align:right;">${{ '%.4f'|format(c.cost_usd or 0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No sub-agent calls for this session.</div>
+    {% endif %}
+  </section>
+{% endblock %}

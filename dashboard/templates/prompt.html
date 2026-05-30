@@ -1,0 +1,63 @@
+{% extends "_base.html" %}
+
+{% block header_meta %}
+  &nbsp; model: <code>{{ model }}</code>
+{% endblock %}
+
+{% block main %}
+  <section class="wide">
+    <h2>System prompt</h2>
+    <div class="ts" style="margin-bottom: 8px;">
+      Verbatim, from <code>system_prompt.py</code>. This is the constant first message every Claude API call sends.
+      The spec marks it as deliberate and not to be modified.
+    </div>
+    <pre>{{ system_prompt }}</pre>
+  </section>
+
+  <section class="wide">
+    <h2>Per-invocation context (user prompt)</h2>
+    <div class="ts" style="margin-bottom: 8px;">
+      Each cron wake assembles these blocks (in this order) and sends them as the first user message.
+      Empty blocks are omitted.
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:240px">block</th>
+          <th>contents</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for label, desc in context_blocks %}
+        <tr>
+          <td><strong>{{ label }}</strong></td>
+          <td>{{ desc }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="wide">
+    <h2>Tools <span class="small">({{ tools|length }} registered)</span></h2>
+    <div class="ts" style="margin-bottom: 8px;">
+      Every API call sends these definitions in the <code>tools</code> field. The model sees each tool's
+      name, description, and input schema, and can call any of them in any order until it calls
+      <code>finish_session</code> (or hits a safety limit).
+    </div>
+
+    {% for t in tools %}
+      <details style="margin-bottom: 6px;">
+        <summary>
+          <span class="tool {{ t.name|tool_category }}">{{ t.name }}</span>
+          &nbsp;
+          <span class="ts">{{ t.description }}</span>
+        </summary>
+        <div style="padding: 8px 0 0 24px;">
+          <div class="ts" style="margin-bottom: 4px;">input schema:</div>
+          <pre>{{ t.input_schema|fmt_json }}</pre>
+        </div>
+      </details>
+    {% endfor %}
+  </section>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "_base.html" %}
+
+{% block title %}Actions log — dashboard{% endblock %}
+
+{% block header_meta %}
+  &nbsp; actions log
+{% endblock %}
+
+{% block main %}
+  <section class="wide">
+    <h2>Actions <span class="small">({{ actions|length }} shown · limit={{ limit }})</span></h2>
+    <div class="small" style="margin-bottom: 8px;">
+      Newest first. Adjust limit via <code>?limit=N</code> (max 1000).
+      Jump:
+      <a href="{{ url_for('actions_log', limit=50, instance=selected_instance.id if selected_instance else None) }}">50</a> ·
+      <a href="{{ url_for('actions_log', limit=200, instance=selected_instance.id if selected_instance else None) }}">200</a> ·
+      <a href="{{ url_for('actions_log', limit=500, instance=selected_instance.id if selected_instance else None) }}">500</a> ·
+      <a href="{{ url_for('actions_log', limit=1000, instance=selected_instance.id if selected_instance else None) }}">1000</a>
+    </div>
+    {% if actions %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">id</th>
+            <th style="width:170px">timestamp</th>
+            <th style="width:60px">sess</th>
+            <th style="width:170px">tool</th>
+            <th>args / result</th>
+            <th style="width:80px; text-align:right;">duration</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for a in actions %}
+          <tr>
+            <td class="ts">{{ a.id }}</td>
+            <td class="ts">{{ a.timestamp|fmt_dt }}</td>
+            <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
+            <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
+            <td>
+              {% if a.args_json %}
+                <details>
+                  <summary>args</summary>
+                  <pre>{{ a.args_json|fmt_json }}</pre>
+                </details>
+              {% endif %}
+              {% if a.error %}
+                <div class="err">{{ a.error }}</div>
+              {% else %}
+                <div>{{ a.result_summary or '—' }}</div>
+              {% endif %}
+            </td>
+            <td style="text-align:right;" class="ts">{{ a.duration_ms|duration }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No actions logged.</div>
+    {% endif %}
+  </section>
+{% endblock %}
