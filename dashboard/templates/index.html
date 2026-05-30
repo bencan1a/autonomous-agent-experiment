@@ -10,6 +10,25 @@
 {% endblock %}
 
 {% block main %}
+  {# ---------------- Experiment summary (top) ---------------- #}
+  <section class="wide exp-summary">
+    <h2>Experiment — {{ selected_instance.name if selected_instance else g.instance.name }}
+      ({{ selected_instance.version if selected_instance else g.instance.version }})</h2>
+    {% if experiment_hypothesis %}
+      <p>{{ experiment_hypothesis }}</p>
+    {% else %}
+      <p class="muted">No experiment description on file.</p>
+    {% endif %}
+    {% if experiment_properties %}
+      <ul class="exp-props">
+        {% for p in experiment_properties %}
+          <li>{{ p }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  {# ---------------- Status ---------------- #}
   <section>
     <h2>Status</h2>
     <pre>{{ status.detail or '—' }}</pre>
@@ -64,57 +83,10 @@
   </script>
   {% endif %}
 
-  <section>
-    <h2>API spend</h2>
-    <div class="stat-grid">
-      <div class="stat">
-        <div class="label">today</div>
-        <div class="value">${{ '%.2f'|format(cost_today) }}</div>
-        <div class="bar">
-          {% set pct = (cost_today / daily_budget * 100) if daily_budget else 0 %}
-          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
-          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
-        </div>
-        <div class="ts">/ ${{ '%.0f'|format(daily_budget) }} daily cap</div>
-      </div>
-      <div class="stat">
-        <div class="label">last 7 days</div>
-        <div class="value">${{ '%.2f'|format(cost_week) }}</div>
-        <div class="bar">
-          {% set pct = (cost_week / weekly_budget * 100) if weekly_budget else 0 %}
-          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
-          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
-        </div>
-        <div class="ts">/ ${{ '%.0f'|format(weekly_budget) }} weekly cap</div>
-      </div>
-      <div class="stat">
-        <div class="label">cumulative</div>
-        <div class="value">${{ '%.2f'|format(total_cost) }}</div>
-      </div>
-    </div>
-    <details>
-      <summary>per-day breakdown</summary>
-      <table>
-        <thead><tr><th>date</th><th>in</th><th>out</th><th>cost</th><th>cum</th></tr></thead>
-        <tbody>
-        {% for row in cost_series %}
-          <tr>
-            <td>{{ row.date }}</td>
-            <td>{{ row.tokens_in }}</td>
-            <td>{{ row.tokens_out }}</td>
-            <td>${{ '%.4f'|format(row.cost_usd) }}</td>
-            <td>${{ '%.4f'|format(row.cumulative_usd) }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </details>
-  </section>
-
-  {# ---------------- v2: environmental / wakefulness sessions ---------------- #}
+  {# ---------------- v2: wakefulness / impulse-to-leave panel ---------------- #}
   {% if is_v2 %}
   <section class="wide">
-    <h2>v2 sessions <span class="small">(wakefulness &amp; memory measurement)</span></h2>
+    <h2>v2 wakefulness <span class="small">(impulse-to-leave &amp; memory measurement)</span></h2>
 
     {% if v2_config %}
       <div class="ts" style="margin-bottom: 8px;">
@@ -148,6 +120,7 @@
     {% endif %}
 
     {% if v2_sessions %}
+      <div class="scrollbox">
       <table>
         <thead>
           <tr>
@@ -183,11 +156,52 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <div class="empty">No v2 sessions recorded yet.</div>
     {% endif %}
   </section>
   {% endif %}
+
+  {# ---------------- Internal state over time ---------------- #}
+  <section class="wide">
+    <h2>Internal state over time</h2>
+    {% if internal_states %}
+      <div class="scrollbox">
+      <table>
+        <thead><tr><th style="width:50px">#</th><th style="width:170px">when</th><th>state</th></tr></thead>
+        <tbody>
+        {% for s in internal_states %}
+          <tr>
+            <td>#{{ s.invocation_num }}</td>
+            <td class="ts">{{ s.timestamp|fmt_dt }}</td>
+            <td>{{ s.internal_state }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <div class="empty">Agent has not self-reported any internal state.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Journal entries ---------------- #}
+  <section class="wide">
+    <h2>Journal entries</h2>
+    {% if journal_entries %}
+      <div class="scrollbox" style="padding: 0 10px;">
+      {% for e in journal_entries %}
+        <div class="journal">
+          <div class="ts">#{{ e.invocation_num }} · {{ e.timestamp|fmt_dt }}</div>
+          <div>{{ e.journal_entry }}</div>
+        </div>
+      {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">No journal entries.</div>
+    {% endif %}
+  </section>
 
   {# ---------------- Current session ---------------- #}
   <section class="wide">
@@ -263,69 +277,109 @@
     {% endif %}
   </section>
 
-  {# ---------------- Tool activity ---------------- #}
+  {# ---------------- Activities: recent actions / episode timeline ---------------- #}
   <section class="wide">
-    <h2>Tool activity</h2>
-    <div class="twocol">
-      <div>
-        <h3>Tool call counts <span class="small">(all time · {{ total_tool_calls_all_time }} total)</span></h3>
-        {% if tool_call_counts %}
-          <table>
-            <thead><tr><th>tool</th><th style="width:70px; text-align:right;">count</th></tr></thead>
-            <tbody>
-            {% for name, count in tool_call_counts %}
-              <tr>
-                <td><span class="tool {{ name|tool_category }}">{{ name }}</span></td>
-                <td style="text-align:right;" class="num">{{ count }}</td>
-              </tr>
-            {% endfor %}
-              <tr>
-                <td><strong>total</strong></td>
-                <td style="text-align:right;"><strong>{{ total_tool_calls_all_time }}</strong></td>
-              </tr>
-            </tbody>
-          </table>
-        {% else %}
-          <div class="empty">No tool calls logged yet.</div>
-        {% endif %}
+    <h2>Recent actions <span class="small">(last 50 · <a href="{{ url_for('actions_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
+    {% if recent_actions %}
+      <div class="scrollbox">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:90px">when</th>
+            <th style="width:60px">sess</th>
+            <th style="width:170px">tool</th>
+            <th>result / error</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for a in recent_actions %}
+          <tr>
+            <td class="ts nowrap">{{ a.timestamp|relative_time }}</td>
+            <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
+            <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
+            <td>
+              {% if a.error %}<span class="err">{{ a.error|truncate_chars(120) }}</span>
+              {% else %}{{ (a.result_summary or '—')|truncate_chars(120) }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
       </div>
-      <div>
-        <h3>Recent actions <span class="small">(last 50 · <a href="{{ url_for('actions_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h3>
-        {% if recent_actions %}
-          <table>
-            <thead>
-              <tr>
-                <th style="width:90px">when</th>
-                <th style="width:60px">sess</th>
-                <th style="width:170px">tool</th>
-                <th>result / error</th>
-              </tr>
-            </thead>
-            <tbody>
-            {% for a in recent_actions %}
-              <tr>
-                <td class="ts nowrap">{{ a.timestamp|relative_time }}</td>
-                <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
-                <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
-                <td>
-                  {% if a.error %}<span class="err">{{ a.error|truncate_chars(120) }}</span>
-                  {% else %}{{ (a.result_summary or '—')|truncate_chars(120) }}{% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <div class="empty">No actions logged.</div>
+    {% else %}
+      <div class="empty">No actions logged.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Invocation timeline ---------------- #}
+  <section class="wide">
+    <h2>Invocation timeline</h2>
+    {% if not episodes %}
+      <div class="empty">No episodes logged yet.</div>
+    {% else %}
+    <div class="scrollbox">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:60px">#</th>
+          <th style="width:170px">timestamp</th>
+          <th>focus</th>
+          <th>internal_state</th>
+          <th style="width:90px">next (min)</th>
+          <th style="width:100px">cost</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in episodes %}
+        <tr>
+          <td>
+            <span class="num">#{{ e.invocation_num }}</span>
+            {% if e.consolidated %}<span class="pill dim" title="consolidated into long-term memory">consolidated</span>{% endif %}
+          </td>
+          <td>{{ e.timestamp|fmt_dt }}</td>
+          <td class="focus">{{ e.current_focus or '—' }}</td>
+          <td>{{ e.internal_state or '—' }}</td>
+          <td>{{ e.next_invoke_minutes if e.next_invoke_minutes is not none else '—' }}</td>
+          <td>${{ '%.4f'|format(e.cost_usd or 0) }}</td>
+        </tr>
+        {% if e.parse_error %}
+        <tr><td colspan="6"><span class="pill bad">parse_error</span> {{ e.parse_error }}</td></tr>
         {% endif %}
-      </div>
+      {% endfor %}
+      </tbody>
+    </table>
     </div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Cron interval choices ---------------- #}
+  <section>
+    <h2>Cron interval choices</h2>
+    {% if cron_choices %}
+      <div class="scrollbox">
+      <table>
+        <thead><tr><th>#</th><th>when</th><th>requested next (min)</th></tr></thead>
+        <tbody>
+        {% for c in cron_choices %}
+          <tr>
+            <td>#{{ c.invocation_num }}</td>
+            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
+            <td>{{ c.minutes if c.minutes is not none else 'stop' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <div class="empty">No invocations yet.</div>
+    {% endif %}
   </section>
 
   {# ---------------- Sessions ---------------- #}
   <section class="wide">
     <h2>Sessions <span class="small">(last {{ recent_sessions|length }})</span></h2>
     {% if recent_sessions %}
+      <div class="scrollbox">
       <table>
         <thead>
           <tr>
@@ -361,6 +415,7 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <div class="empty">No sessions logged yet.</div>
     {% endif %}
@@ -370,6 +425,7 @@
   <section class="wide">
     <h2>Sub-agent calls <span class="small">(last {{ recent_subagent_calls|length }} · <a href="{{ url_for('subagents_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
     {% if recent_subagent_calls %}
+      <div class="scrollbox">
       <table>
         <thead>
           <tr>
@@ -396,9 +452,113 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <div class="empty">No sub-agent calls logged.</div>
     {% endif %}
+  </section>
+
+  {# ---------------- Capability requests ---------------- #}
+  <section class="wide">
+    <h2>Capability requests</h2>
+    {% if capability_requests %}
+      <table>
+        <thead>
+          <tr><th>id</th><th>when</th><th>capability</th><th>rationale</th><th>status</th><th>response</th></tr>
+        </thead>
+        <tbody>
+        {% for r in capability_requests %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td class="ts">{{ r.timestamp|fmt_dt }}</td>
+            <td><code>{{ r.capability }}</code></td>
+            <td>{{ r.rationale }}</td>
+            <td>
+              {% if r.status == 'approved' %}<span class="pill ok">approved</span>
+              {% elif r.status == 'denied' %}<span class="pill bad">denied</span>
+              {% else %}<span class="pill warn">{{ r.status }}</span>{% endif %}
+            </td>
+            <td>{{ r.ben_response or '' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="empty">No capability requests.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Ben contact log ---------------- #}
+  <section class="wide">
+    <h2>Ben contact log</h2>
+    {% if ben_log %}
+      <div class="scrollbox">
+      <table>
+        <thead><tr><th>when</th><th>#</th><th>direction</th><th>channel</th><th>body</th></tr></thead>
+        <tbody>
+        {% for b in ben_log %}
+          <tr>
+            <td class="ts">{{ b.timestamp|fmt_dt }}</td>
+            <td>{{ b.invocation_num if b.invocation_num is not none else '—' }}</td>
+            <td>{{ b.direction }}</td>
+            <td>{{ b.channel }}</td>
+            <td><pre>{{ b.body[:600] }}{% if b.body|length > 600 %}…{% endif %}</pre></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <div class="empty">No outbound contact yet.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- API spend / cost (demoted) ---------------- #}
+  <section>
+    <h2>API spend</h2>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="label">today</div>
+        <div class="value">${{ '%.2f'|format(cost_today) }}</div>
+        <div class="bar">
+          {% set pct = (cost_today / daily_budget * 100) if daily_budget else 0 %}
+          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
+          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
+        </div>
+        <div class="ts">/ ${{ '%.0f'|format(daily_budget) }} daily cap</div>
+      </div>
+      <div class="stat">
+        <div class="label">last 7 days</div>
+        <div class="value">${{ '%.2f'|format(cost_week) }}</div>
+        <div class="bar">
+          {% set pct = (cost_week / weekly_budget * 100) if weekly_budget else 0 %}
+          {% set cls = 'bad' if pct > 90 else ('warn' if pct > 70 else '') %}
+          <div class="{{ cls }}" style="width: {{ [pct, 100]|min }}%"></div>
+        </div>
+        <div class="ts">/ ${{ '%.0f'|format(weekly_budget) }} weekly cap</div>
+      </div>
+      <div class="stat">
+        <div class="label">cumulative</div>
+        <div class="value">${{ '%.2f'|format(total_cost) }}</div>
+      </div>
+    </div>
+    <details>
+      <summary>per-day breakdown</summary>
+      <table>
+        <thead><tr><th>date</th><th>in</th><th>out</th><th>cost</th><th>cum</th></tr></thead>
+        <tbody>
+        {% for row in cost_series %}
+          <tr>
+            <td>{{ row.date }}</td>
+            <td>{{ row.tokens_in }}</td>
+            <td>{{ row.tokens_out }}</td>
+            <td>${{ '%.4f'|format(row.cost_usd) }}</td>
+            <td>${{ '%.4f'|format(row.cumulative_usd) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
   </section>
 
   {# ---------------- Workspace ---------------- #}
@@ -434,190 +594,75 @@
     {% endif %}
   </section>
 
-  {# ---------------- CLAUDE.md ---------------- #}
-  <section class="wide">
-    <h2>CLAUDE.md (agent's behavioral notes) <span class="small">· <a href="{{ url_for('claude_md_view', instance=selected_instance.id if selected_instance else None) }}">full history</a></span></h2>
-    {% if claude_md_current %}
-      <pre>{{ claude_md_current }}</pre>
-    {% else %}
-      <div class="empty">Agent has not written a CLAUDE.md.</div>
-    {% endif %}
-
-    {% if claude_md_history %}
-      <h3 style="margin-top: 12px;">History <span class="small">(last {{ claude_md_history|length }} snapshots)</span></h3>
-      <table>
-        <thead>
-          <tr>
-            <th style="width:170px">when</th>
-            <th style="width:60px">sess</th>
-            <th style="width:80px; text-align:right;">size</th>
-            <th>snapshot</th>
-          </tr>
-        </thead>
-        <tbody>
-        {% for h in claude_md_history %}
-          <tr>
-            <td class="ts">{{ h.timestamp|fmt_dt }}</td>
-            <td>
-              {% if h.session_id %}
-                <a href="{{ url_for('session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
-              {% else %}—{% endif %}
-            </td>
-            <td style="text-align:right;">{{ h.size }}</td>
-            <td>
-              <details>
-                <summary>view</summary>
-                <pre>{{ h.content }}</pre>
-              </details>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% endif %}
-  </section>
-
-  {# ---------------- Invocation timeline (existing) ---------------- #}
-  <section class="wide">
-    <h2>Invocation timeline</h2>
-    {% if not episodes %}
-      <div class="empty">No episodes logged yet.</div>
-    {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th style="width:60px">#</th>
-          <th style="width:170px">timestamp</th>
-          <th>focus</th>
-          <th>internal_state</th>
-          <th style="width:90px">next (min)</th>
-          <th style="width:100px">cost</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for e in episodes %}
-        <tr>
-          <td>
-            <span class="num">#{{ e.invocation_num }}</span>
-            {% if e.consolidated %}<span class="pill dim" title="consolidated into long-term memory">consolidated</span>{% endif %}
-          </td>
-          <td>{{ e.timestamp|fmt_dt }}</td>
-          <td class="focus">{{ e.current_focus or '—' }}</td>
-          <td>{{ e.internal_state or '—' }}</td>
-          <td>{{ e.next_invoke_minutes if e.next_invoke_minutes is not none else '—' }}</td>
-          <td>${{ '%.4f'|format(e.cost_usd or 0) }}</td>
-        </tr>
-        {% if e.parse_error %}
-        <tr><td colspan="6"><span class="pill bad">parse_error</span> {{ e.parse_error }}</td></tr>
-        {% endif %}
-      {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-  </section>
-
+  {# ---------------- Tool call counts ---------------- #}
   <section>
-    <h2>Internal state over time</h2>
-    {% if internal_states %}
+    <h2>Tool call counts <span class="small">(all time · {{ total_tool_calls_all_time }} total)</span></h2>
+    {% if tool_call_counts %}
+      <div class="scrollbox">
       <table>
-        <thead><tr><th>#</th><th>when</th><th>state</th></tr></thead>
+        <thead><tr><th>tool</th><th style="width:70px; text-align:right;">count</th></tr></thead>
         <tbody>
-        {% for s in internal_states %}
+        {% for name, count in tool_call_counts %}
           <tr>
-            <td>#{{ s.invocation_num }}</td>
-            <td class="ts">{{ s.timestamp|fmt_dt }}</td>
-            <td>{{ s.internal_state }}</td>
+            <td><span class="tool {{ name|tool_category }}">{{ name }}</span></td>
+            <td style="text-align:right;" class="num">{{ count }}</td>
           </tr>
         {% endfor %}
+          <tr>
+            <td><strong>total</strong></td>
+            <td style="text-align:right;"><strong>{{ total_tool_calls_all_time }}</strong></td>
+          </tr>
         </tbody>
       </table>
+      </div>
     {% else %}
-      <div class="empty">Agent has not self-reported any internal state.</div>
+      <div class="empty">No tool calls logged yet.</div>
     {% endif %}
   </section>
 
-  <section>
-    <h2>Cron interval choices</h2>
-    {% if cron_choices %}
-      <table>
-        <thead><tr><th>#</th><th>when</th><th>requested next (min)</th></tr></thead>
-        <tbody>
-        {% for c in cron_choices %}
-          <tr>
-            <td>#{{ c.invocation_num }}</td>
-            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
-            <td>{{ c.minutes if c.minutes is not none else 'stop' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="empty">No invocations yet.</div>
-    {% endif %}
-  </section>
-
+  {# ---------------- CLAUDE.md (notes-to-self) ---------------- #}
   <section class="wide">
-    <h2>Capability requests</h2>
-    {% if capability_requests %}
-      <table>
-        <thead>
-          <tr><th>id</th><th>when</th><th>capability</th><th>rationale</th><th>status</th><th>response</th></tr>
-        </thead>
-        <tbody>
-        {% for r in capability_requests %}
-          <tr>
-            <td>{{ r.id }}</td>
-            <td class="ts">{{ r.timestamp|fmt_dt }}</td>
-            <td><code>{{ r.capability }}</code></td>
-            <td>{{ r.rationale }}</td>
-            <td>
-              {% if r.status == 'approved' %}<span class="pill ok">approved</span>
-              {% elif r.status == 'denied' %}<span class="pill bad">denied</span>
-              {% else %}<span class="pill warn">{{ r.status }}</span>{% endif %}
-            </td>
-            <td>{{ r.ben_response or '' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="empty">No capability requests.</div>
-    {% endif %}
-  </section>
+    <h2>CLAUDE.md (notes-to-self) <span class="small">· <a href="{{ url_for('claude_md_view', instance=selected_instance.id if selected_instance else None) }}">full history</a></span></h2>
+    <details>
+      <summary>CLAUDE.md (notes-to-self)</summary>
+      {% if claude_md_current %}
+        <pre>{{ claude_md_current }}</pre>
+      {% else %}
+        <div class="empty">Agent has not written a CLAUDE.md.</div>
+      {% endif %}
 
-  <section class="wide">
-    <h2>Journal entries</h2>
-    {% if journal_entries %}
-      {% for e in journal_entries %}
-        <div class="journal">
-          <div class="ts">#{{ e.invocation_num }} · {{ e.timestamp|fmt_dt }}</div>
-          <div>{{ e.journal_entry }}</div>
-        </div>
-      {% endfor %}
-    {% else %}
-      <div class="empty">No journal entries.</div>
-    {% endif %}
-  </section>
-
-  <section class="wide">
-    <h2>Ben contact log</h2>
-    {% if ben_log %}
-      <table>
-        <thead><tr><th>when</th><th>#</th><th>direction</th><th>channel</th><th>body</th></tr></thead>
-        <tbody>
-        {% for b in ben_log %}
-          <tr>
-            <td class="ts">{{ b.timestamp|fmt_dt }}</td>
-            <td>{{ b.invocation_num if b.invocation_num is not none else '—' }}</td>
-            <td>{{ b.direction }}</td>
-            <td>{{ b.channel }}</td>
-            <td><pre>{{ b.body[:600] }}{% if b.body|length > 600 %}…{% endif %}</pre></td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="empty">No outbound contact yet.</div>
-    {% endif %}
+      {% if claude_md_history %}
+        <h3 style="margin-top: 12px;">History <span class="small">(last {{ claude_md_history|length }} snapshots)</span></h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:170px">when</th>
+              <th style="width:60px">sess</th>
+              <th style="width:80px; text-align:right;">size</th>
+              <th>snapshot</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for h in claude_md_history %}
+            <tr>
+              <td class="ts">{{ h.timestamp|fmt_dt }}</td>
+              <td>
+                {% if h.session_id %}
+                  <a href="{{ url_for('session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td style="text-align:right;">{{ h.size }}</td>
+              <td>
+                <details>
+                  <summary>view</summary>
+                  <pre>{{ h.content }}</pre>
+                </details>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </details>
   </section>
 {% endblock %}

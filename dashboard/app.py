@@ -382,6 +382,10 @@ def index():
             "model": cfg.get("model"),
         }
 
+    # Experiment summary: hypothesis blurb (from experiments/<id>.md) + properties.
+    experiment_hypothesis = _experiment_hypothesis(g.instance.id)
+    experiment_properties = _experiment_properties(g.instance)
+
     next_fire = cron_control.next_fire_at(g.instance.id)
     # JS countdown is driven by epoch-ms in local time; we send both ISO
     # (for display fallback) and epoch-ms.
@@ -421,8 +425,74 @@ def index():
         v2_config=v2_config,
         weekly_budget=float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
         daily_budget=float(os.environ.get("DAILY_BUDGET_USD", "50")),
+        experiment_hypothesis=experiment_hypothesis,
+        experiment_properties=experiment_properties,
         now=datetime.now(UTC).isoformat(),
     )
+
+
+def _experiment_hypothesis(instance_id: str) -> str | None:
+    """Extract the body of the '## Question / hypothesis' section from
+    experiments/<id>.md (heading until the next '##'). Truncated to ~600 chars.
+    Returns None if the file or section is missing/empty."""
+    path = ROOT / "experiments" / f"{instance_id}.md"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    body: list[str] = []
+    capturing = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            heading = stripped[3:].strip().lower()
+            if heading.startswith("question") or "hypothesis" in heading:
+                capturing = True
+                continue
+            if capturing:
+                break  # next section — stop
+        elif capturing:
+            body.append(line)
+    blurb = "\n".join(body).strip()
+    if not blurb:
+        return None
+    if len(blurb) > 600:
+        blurb = blurb[:600].rstrip() + "…"
+    return blurb
+
+
+def _experiment_properties(instance) -> list[str]:
+    """Build a short list of human-readable property strings from the instance
+    config. Always version + model; v2 adds the wakefulness/memory knobs. All
+    keys are guarded so v1 / missing keys render cleanly."""
+    cfg = getattr(instance, "config", None) or {}
+    props: list[str] = []
+    props.append(f"version: {getattr(instance, 'version', None) or cfg.get('version') or '—'}")
+    model = cfg.get("model") or getattr(instance, "model", None)
+    props.append(f"model: {model or '—'}")
+
+    if getattr(instance, "version", None) == "v2":
+        mwh = cfg.get("min_wake_hours")
+        if mwh is not None:
+            props.append(f"wake reference: {mwh}h (logged, not enforced)")
+        dh = cfg.get("decay_hours")
+        if dh is not None:
+            props.append(f"memory decay: {dh}h")
+        tis = cfg.get("tick_interval_seconds")
+        if tis is not None:
+            try:
+                tick_min = int(tis) // 60
+                props.append(f"tick: {tick_min} min")
+            except (TypeError, ValueError):
+                props.append(f"tick: {tis}s")
+        pc = cfg.get("prompt_caching")
+        if pc is not None:
+            props.append(f"prompt caching: {'on' if pc else 'off'}")
+        isc = cfg.get("in_session_compaction")
+        if isc is not None:
+            props.append(f"in-session compaction: {'on' if isc else 'off'}")
+    return props
 
 
 @app.route("/session/<int:session_id>")

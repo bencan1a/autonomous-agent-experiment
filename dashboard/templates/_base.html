@@ -210,6 +210,39 @@
     vertical-align: bottom;
   }
   .nowrap { white-space: nowrap; }
+  /* JS-free scroll region for long blocks (e.g. activity / ben-contact logs). */
+  .scrollbox {
+    max-height: 24rem;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .scrollbox > table { border-collapse: collapse; }
+  .scrollbox > table th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    z-index: 1;
+  }
+  /* experiment summary block */
+  .exp-summary p { margin: 0 0 8px; color: var(--text); }
+  .exp-summary .muted { color: var(--muted); font-style: italic; }
+  .exp-props {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .exp-props li {
+    background: #0a0d12;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
 </style>
 </head>
 <body>
