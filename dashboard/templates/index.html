@@ -425,7 +425,7 @@
   {# ---------------- API spend / cost (demoted) ---------------- #}
   <section>
     <h2>API spend</h2>
-    <div class="stat-grid">
+    <div class="stat-grid stack">
       <div class="stat">
         <div class="label">today</div>
         <div class="value">${{ '%.2f'|format(cost_today) }}</div>
@@ -489,7 +489,7 @@
     {% if not timeline_events %}
       <div class="empty">No timeline events yet.</div>
     {% else %}
-    <div class="scrollbox tall">
+    <div>
     <table>
       <thead>
         <tr>
