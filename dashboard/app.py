@@ -311,20 +311,18 @@ def index():
     episodes = store.all_episodes()
     capability_requests = store.all_capability_requests()
     cost_by_day = store.cost_by_day()
-    ben_log = store.ben_contact_history(limit=200)
+    # Authoritative inbound count comes from ben_contact_log (direction='in'),
+    # NOT the per-session counter (which only sees in-loop arrivals and misses
+    # messages delivered at session-start reload). The contact log itself drops
+    # observer_channel rows — those are read-only mirror posts, not contact with Ben.
+    _ben_all = store.ben_contact_history(limit=100000)
+    inbound_from_ben = sum(1 for c in _ben_all if c.get("direction") == "in")
+    ben_log = [c for c in _ben_all if c.get("channel") != "observer_channel"][:200]
 
     journal_entries = [e for e in episodes if (e.get("journal_entry") or "").strip()]
     internal_states = [
         {"timestamp": e["timestamp"], "invocation_num": e["invocation_num"], "internal_state": e["internal_state"]}
         for e in episodes if (e.get("internal_state") or "").strip()
-    ]
-    cron_choices = [
-        {
-            "timestamp": e["timestamp"],
-            "invocation_num": e["invocation_num"],
-            "minutes": e["next_invoke_minutes"],
-        }
-        for e in episodes
     ]
 
     cumulative = 0.0
@@ -575,7 +573,9 @@ def index():
         awake_mins = [v / 60.0 for v in awake_vals]
         total_active = sum(int(s.get("active_turns") or 0) for s in v4_sessions)
         total_idle = sum(int(s.get("idle_turns") or 0) for s in v4_sessions)
-        total_inbound = sum(int(s.get("inbound_messages") or 0) for s in v4_sessions)
+        # Authoritative inbound count (see ben_contact_log note above), not the
+        # per-session counter which misses session-start reload deliveries.
+        total_inbound = inbound_from_ben
         total_distress_v4 = sum(int(s.get("distress_alerts") or 0) for s in v4_sessions)
         v4_summary = {
             "count": len(v4_sessions),
@@ -636,7 +636,6 @@ def index():
         episode_count=len(episodes),
         journal_entries=list(reversed(journal_entries)),
         internal_states=list(reversed(internal_states)),
-        cron_choices=list(reversed(cron_choices)),
         capability_requests=capability_requests,
         cost_series=cost_series,
         total_cost=round(total_cost, 4),

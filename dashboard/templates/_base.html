@@ -277,7 +277,7 @@
         </option>
       {% endfor %}
     </select>
-    <button type="submit" class="small">switch</button>
+    {# Dropdown auto-submits on change; no separate submit button. #}
     {% if selected_instance %}
       {% set ist = selected_instance.status %}
       {% if ist == 'active' %}

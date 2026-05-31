@@ -609,29 +609,6 @@
     {% endif %}
   </section>
 
-  {# ---------------- Cron interval choices ---------------- #}
-  <section>
-    <h2>Cron interval choices</h2>
-    {% if cron_choices %}
-      <div class="scrollbox">
-      <table>
-        <thead><tr><th>#</th><th>when</th><th>requested next (min)</th></tr></thead>
-        <tbody>
-        {% for c in cron_choices %}
-          <tr>
-            <td>#{{ c.invocation_num }}</td>
-            <td class="ts">{{ c.timestamp|fmt_dt }}</td>
-            <td>{{ c.minutes if c.minutes is not none else 'stop' }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    {% else %}
-      <div class="empty">No invocations yet.</div>
-    {% endif %}
-  </section>
-
   {# ---------------- Sessions ---------------- #}
   <section class="wide">
     <h2>Sessions <span class="small">(last {{ recent_sessions|length }})</span></h2>
@@ -766,7 +743,7 @@
       </table>
       </div>
     {% else %}
-      <div class="empty">No outbound contact yet.</div>
+      <div class="empty">No contact with Ben yet.</div>
     {% endif %}
   </section>
 

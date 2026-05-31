@@ -1,10 +1,21 @@
 # Experiment v4 — `v4-continuous`
 
-**Status:** SPEC (awaiting sign-off — no code written yet)
+**Status:** LIVE (built + running; launched 2026-05-31)
 **Model:** `claude-opus-4-8`
 **Baseline it supersedes:** `v3-circadian` (paused; flawed instrument — see §9)
 
 ---
+
+## Question / hypothesis
+
+Given genuine autonomy, persistent memory, a continuous ~2h waking period, and **no
+assigned task**, does the agent generate self-originating continuation — keep working,
+start something new, or knowingly rest — or does it complete one bounded thing and go
+quiescent? v4 is the *corrected instrument*: it strips the framing artifacts that made
+earlier versions quit at the first "done" (a leaked tick/end-control reload, a per-turn
+"are you done?" prompt, an empty self-echoing re-prompt), so the behavior observed is the
+agent's, not the harness's. Early result: rich multi-thread self-directed work, principled
+rest, and spontaneous re-engagement out of rest across multiple sessions.
 
 ## 1. Research question
 
