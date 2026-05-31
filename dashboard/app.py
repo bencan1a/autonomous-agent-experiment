@@ -517,19 +517,22 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
             continue
         body = (c.get("body") or "").strip()
         direction = c.get("direction")
+        # Full body as the summary — the template clamps it to ~10 lines and
+        # shows the full text on hover (title=). No server-side truncation, and
+        # no redundant detail/body, so nothing hides behind a 'details' toggle.
         if direction == "in":
             events.append({
                 "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
                 "type": "Ben →", "icon": "📨",
-                "summary": f"Ben: {_trunc(body)}",
-                "detail": {"body": body} if body else None,
+                "summary": f"Ben: {body}",
+                "detail": None,
             })
         elif direction == "out":
             events.append({
                 "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
                 "type": "→ Ben", "icon": "📤",
-                "summary": f"→ Ben: {_trunc(body)}",
-                "detail": {"body": body} if body else None,
+                "summary": f"→ Ben: {body}",
+                "detail": None,
             })
 
     # Stable sort by ts ascending; equal ts keeps insertion order.
