@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 {% block head_extra %}{% endblock %}
 <title>{% block title %}Autonomous Agent — Dashboard{% endblock %}</title>
 <style>
@@ -291,6 +292,81 @@
     color: var(--text);
   }
   input[type="password"]::placeholder { color: var(--muted); opacity: 0.7; }
+
+  /* ---------------- Mobile / narrow-viewport layout ----------------
+     All rules live behind this breakpoint so the desktop layout above
+     is untouched. Goal: read the content logs top-to-bottom with no
+     pinch-zoom or sideways scroll, and tappable controls. */
+  @media (max-width: 640px) {
+    body { font-size: 14px; }
+    /* Stack the multi-column grids into a single column. */
+    main { grid-template-columns: 1fr; padding: 12px; gap: 12px; }
+    .twocol { grid-template-columns: 1fr; }
+
+    /* Header: tighter padding; nav becomes a swipeable, tappable strip. */
+    header { padding: 12px; }
+    header nav {
+      font-size: 13px;
+      display: flex;
+      gap: 4px;
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    header nav a {
+      margin-left: 0;
+      padding: 8px 10px;
+      white-space: nowrap;
+    }
+    /* Controls: full-width, comfortable tap targets, 16px to avoid iOS
+       focus-zoom. Applies to the instance switcher + Pause/Resume form. */
+    header .instance-bar { width: 100%; }
+    header .instance-bar select,
+    .ctl-toggle,
+    #ctl-form button,
+    #ctl-form input[type="password"] {
+      width: 100%;
+      min-height: 44px;
+      font-size: 16px;
+    }
+    header .instance-bar select { font-size: 16px; }
+
+    /* Card-stack data tables: each row becomes a labelled card so the
+       narrative reads in full width. The `stack` class + per-cell
+       `data-label` are added at load by the script near </body>. */
+    table.stack thead { display: none; }
+    table.stack tr {
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      background: var(--panel);
+    }
+    table.stack td {
+      display: block;
+      border: none;
+      padding: 3px 0;
+      text-align: left !important;  /* override inline text-align:right on cells */
+    }
+    table.stack td::before {
+      content: attr(data-label);
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    /* Don't print an empty label line for cells with no header. */
+    table.stack td:not([data-label])::before,
+    table.stack td[data-label=""]::before { content: none; }
+    /* Neutralize the inline pixel widths on <th>/<td> at this width. */
+    table th, table td { width: auto !important; }
+
+    /* Readability: let clamped/scrolling regions breathe on mobile. */
+    .truncate { max-width: 100%; }
+    .scrollbox, .scrollbox.tall { max-height: none; }
+  }
 </style>
 </head>
 <body>
@@ -355,5 +431,28 @@
 <main>
   {% block main %}{% endblock %}
 </main>
+
+<script>
+/* Make data tables card-stackable on narrow viewports: copy each column
+   header into its cells' data-label and tag the table `stack`. The CSS
+   above only acts on these at <=640px, so desktop is unaffected. The
+   live <thead> is the single source of truth for labels. Opt a table
+   out with class="no-stack". */
+(function () {
+  document.querySelectorAll("main table:not(.no-stack)").forEach(function (table) {
+    var heads = Array.prototype.map.call(
+      table.querySelectorAll("thead th"),
+      function (th) { return th.textContent.trim(); }
+    );
+    if (!heads.length) return;
+    table.classList.add("stack");
+    table.querySelectorAll("tbody tr").forEach(function (tr) {
+      Array.prototype.forEach.call(tr.children, function (td, i) {
+        if (heads[i]) td.setAttribute("data-label", heads[i]);
+      });
+    });
+  });
+})();
+</script>
 </body>
 </html>
