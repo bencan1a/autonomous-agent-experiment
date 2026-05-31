@@ -65,13 +65,8 @@
     font-size: 11px;
   }
   header .instance-bar select {
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-family: inherit;
     font-size: 11px;
+    padding: 2px 20px 2px 6px;
   }
   header .instance-bar .cost { color: var(--muted); }
   header .instance-bar .cost .num { color: var(--accent); font-weight: 600; }
@@ -241,6 +236,11 @@
     background: var(--panel);
     z-index: 1;
   }
+  /* timeline per-turn banding (subtle alternating background) */
+  tr.tl-band-1 > td { background: #0d1117; }   /* odd turns: near-black */
+  tr.tl-band-0 > td { background: #161b22; }   /* even turns: panel grey */
+  /* taller scroll region for the timeline (~20 rows before scroll) */
+  .scrollbox.tall { max-height: 42rem; }
   /* experiment summary block */
   .exp-summary p { margin: 0 0 8px; color: var(--text); }
   .exp-summary .muted { color: var(--muted); font-style: italic; }
@@ -260,6 +260,37 @@
     font-size: 11px;
     color: var(--muted);
   }
+  /* Buttons and form inputs — match the dark monospace theme */
+  button, input[type="password"], select {
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1.5;
+  }
+  select {
+    padding-right: 22px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237d8590'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 7px center;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  input[type="password"] {
+    cursor: text;
+    color: var(--muted);
+  }
+  input[type="password"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  input[type="password"]::placeholder { color: var(--muted); opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -268,6 +299,7 @@
   {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
   <nav>
     <a href="{{ url_for('index') }}{{ iq }}">overview</a>
+    <a href="{{ url_for('logs') }}{{ iq }}">logs</a>
     <a href="{{ url_for('workspace_index') }}{{ iq }}">workspace</a>
     <a href="{{ url_for('actions_log') }}{{ iq }}">actions</a>
     <a href="{{ url_for('subagents_log') }}{{ iq }}">subagents</a>

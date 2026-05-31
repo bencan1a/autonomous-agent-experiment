@@ -100,6 +100,10 @@ def _tool_category(tool_name: str | None) -> str:
 
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
+# Re-read templates from disk when they change, so edits to dashboard/templates/*.html
+# take effect on the next request without restarting the long-lived process. Cheap
+# (an mtime stat per render); independent of debug mode, which stays off in prod.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 def _control_authorized(provided: str | None) -> bool:
@@ -587,6 +591,17 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     events_indexed.sort(key=lambda pair: (_parse_iso(pair[1]["ts"]) or datetime.min.replace(tzinfo=UTC), pair[0]))
     events = [e for _i, e in events_indexed]
 
+    # Per-turn banding: rows of the same turn share a shade; consecutive turns
+    # alternate. Turn-None rows carry the previous turn's band so a turn's rows
+    # stay visually grouped.
+    last_turn = 0
+    for e in events:
+        if e.get("type") == "woke":
+            last_turn = 0
+        if e.get("turn") is not None:
+            last_turn = e["turn"]
+        e["band"] = last_turn % 2   # odd turn -> 1, even/none -> 0
+
     invocations = sorted(
         {e.get("invocation_num") for e in episodes if e.get("invocation_num") is not None},
         reverse=True,
@@ -606,8 +621,7 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     return {"events": events, "invocations": invocations, "selected": selected}
 
 
-@app.route("/")
-def index():
+def _dashboard_context() -> dict:
     store = _store()
     episodes = store.all_episodes()
     capability_requests = store.all_capability_requests()
@@ -927,56 +941,65 @@ def index():
     next_fire_iso = next_fire.isoformat() if next_fire else None
     next_fire_epoch_ms = int(next_fire.timestamp() * 1000) if next_fire else None
 
-    return render_template(
-        "index.html",
-        recent_files=recent_files,
-        next_fire_iso=next_fire_iso,
-        next_fire_epoch_ms=next_fire_epoch_ms,
-        status=status,
-        is_live=is_live,
-        current_session=current_session,
-        current_actions=current_actions,
-        recent_sessions=recent_sessions,
-        recent_actions=recent_actions,
-        recent_subagent_calls=recent_subagent_calls,
-        claude_md_current=claude_md_current,
-        claude_md_history=claude_md_history,
-        total_tool_calls_all_time=total_tool_calls_all_time,
-        tool_call_counts=tool_call_counts,
-        episodes=list(reversed(episodes)),  # newest first
-        episode_count=len(episodes),
-        journal_entries=list(reversed(journal_entries)),
-        internal_states=list(reversed(internal_states)),
-        capability_requests=capability_requests,
-        cost_series=cost_series,
-        total_cost=round(total_cost, 4),
-        cost_today=round(cost_today, 4),
-        cost_week=round(cost_week, 4),
-        ben_log=ben_log,
-        is_v2=is_v2,
-        v2_sessions=v2_sessions,
-        v2_summary=v2_summary,
-        v2_config=v2_config,
-        is_v3=is_v3,
-        v3_sessions=v3_sessions,
-        v3_summary=v3_summary,
-        v3_config=v3_config,
-        v3_tick_rows=v3_tick_rows,
-        is_v4=is_v4,
-        v4_sessions=v4_sessions,
-        v4_summary=v4_summary,
-        v4_config=v4_config,
-        weekly_budget=float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
-        daily_budget=float(os.environ.get("DAILY_BUDGET_USD", "50")),
-        experiment_hypothesis=experiment_hypothesis,
-        experiment_properties=experiment_properties,
-        control_state=control_state,
-        control_msg=control_msg,
-        timeline_events=timeline["events"],
-        timeline_invocations=timeline["invocations"],
-        timeline_selected=timeline["selected"],
-        now=datetime.now(UTC).isoformat(),
-    )
+    return {
+        "recent_files": recent_files,
+        "next_fire_iso": next_fire_iso,
+        "next_fire_epoch_ms": next_fire_epoch_ms,
+        "status": status,
+        "is_live": is_live,
+        "current_session": current_session,
+        "current_actions": current_actions,
+        "recent_sessions": recent_sessions,
+        "recent_actions": recent_actions,
+        "recent_subagent_calls": recent_subagent_calls,
+        "claude_md_current": claude_md_current,
+        "claude_md_history": claude_md_history,
+        "total_tool_calls_all_time": total_tool_calls_all_time,
+        "tool_call_counts": tool_call_counts,
+        "episodes": list(reversed(episodes)),  # newest first
+        "episode_count": len(episodes),
+        "journal_entries": list(reversed(journal_entries)),
+        "internal_states": list(reversed(internal_states)),
+        "capability_requests": capability_requests,
+        "cost_series": cost_series,
+        "total_cost": round(total_cost, 4),
+        "cost_today": round(cost_today, 4),
+        "cost_week": round(cost_week, 4),
+        "ben_log": ben_log,
+        "is_v2": is_v2,
+        "v2_sessions": v2_sessions,
+        "v2_summary": v2_summary,
+        "v2_config": v2_config,
+        "is_v3": is_v3,
+        "v3_sessions": v3_sessions,
+        "v3_summary": v3_summary,
+        "v3_config": v3_config,
+        "v3_tick_rows": v3_tick_rows,
+        "is_v4": is_v4,
+        "v4_sessions": v4_sessions,
+        "v4_summary": v4_summary,
+        "v4_config": v4_config,
+        "weekly_budget": float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
+        "daily_budget": float(os.environ.get("DAILY_BUDGET_USD", "50")),
+        "experiment_hypothesis": experiment_hypothesis,
+        "experiment_properties": experiment_properties,
+        "control_state": control_state,
+        "control_msg": control_msg,
+        "timeline_events": timeline["events"],
+        "timeline_invocations": timeline["invocations"],
+        "timeline_selected": timeline["selected"],
+        "now": datetime.now(UTC).isoformat(),
+    }
+
+
+@app.route("/")
+def index():
+    return render_template("index.html", **_dashboard_context())
+
+
+@app.route("/logs")
+def logs():
+    return render_template("logs.html", **_dashboard_context())
 
 
 # =========================================================================== #
