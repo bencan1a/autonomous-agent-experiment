@@ -221,7 +221,7 @@
         <tbody>
         {% for v in v3_sessions %}
           <tr>
-            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a></td>
+            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
             <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
             <td>
               {{ v.actual_awake_seconds|human_seconds }}

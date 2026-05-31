@@ -402,6 +402,43 @@ def index():
         except Exception:
             v3_sessions = []
 
+        # A running v3 session has NO v3_sessions row yet — that row is written
+        # at session END (log_v3_session). So the summary tiles (cycles / avg
+        # awake / cycles-with-would-end) would read 0 during an in-flight cycle.
+        # Synthesize a LIVE row from the current session's episodes so the
+        # tiles reflect the running cycle, the same way the header now shows
+        # live tool-calls/cost. Marked `live` so the template can label it.
+        if current_session and is_live and not any(
+            s.get("session_id") == current_session["id"] for s in v3_sessions
+        ):
+            sid = current_session["id"]
+            curr_eps = sorted(
+                (e for e in episodes if e.get("session_id") == sid),
+                key=lambda e: e.get("id") or 0,
+            )
+            wen = [int(e.get("would_end_now") or 0) for e in curr_eps]
+            first_wen = next((i + 1 for i, v in enumerate(wen) if v), None)
+            started = _parse_iso(current_session.get("started_at"))
+            awake_s = (
+                (datetime.now(UTC) - started).total_seconds() if started else None
+            )
+            v3_sessions = [{
+                "session_id": sid,
+                "started_at": current_session.get("started_at"),
+                "ended_at": None,
+                "actual_awake_seconds": awake_s,
+                "scheduled_sleep_minutes": None,
+                "num_ticks": len(curr_eps),
+                "would_end_now_count": sum(wen),
+                "first_would_end_now_tick": first_wen,
+                "end_reason": None,
+                "total_cost_usd": current_session.get("total_cost_usd"),
+                "decayed_count": 0,
+                "consolidated_count": 0,
+                "distress_alerts": 0,
+                "live": True,
+            }] + v3_sessions
+
         awake_vals = [
             float(s["actual_awake_seconds"])
             for s in v3_sessions
