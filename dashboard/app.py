@@ -5,6 +5,7 @@ Read-only view of the agent's history. Never mutates state.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sys
@@ -13,7 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, abort, g, render_template, request, send_from_directory
+from flask import (
+    Flask,
+    abort,
+    g,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    url_for,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -21,6 +31,7 @@ load_dotenv(ROOT / ".env", override=True)
 
 from memory.episodic import EpisodicStore  # noqa: E402
 import cron_control  # noqa: E402
+import instance_control  # noqa: E402
 from instances_common import (  # noqa: E402
     active_instance_id,
     list_instances,
@@ -59,6 +70,19 @@ def _tool_category(tool_name: str | None) -> str:
 
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
+
+
+def _control_authorized(provided: str | None) -> bool:
+    """Fail-closed password check for the state-mutating control routes.
+
+    Returns False if the secret is unset OR no password was provided. The secret
+    is read from DASHBOARD_CONTROL_PASSWORD (set by the human in .env). Never
+    logged or echoed.
+    """
+    secret = os.environ.get("DASHBOARD_CONTROL_PASSWORD", "")
+    if not secret or not provided:
+        return False
+    return hmac.compare_digest(provided, secret)
 
 
 def _resolve_instance():
@@ -577,6 +601,15 @@ def index():
     experiment_hypothesis = _experiment_hypothesis(g.instance.id)
     experiment_properties = _experiment_properties(g.instance)
 
+    # Operator pause/resume control state + any confirmation message.
+    control_state = instance_control.read_control(g.instance.id) if getattr(g, "instance", None) else dict(instance_control.DEFAULT_STATE)
+    _control_arg = request.args.get("control")
+    control_msg = {
+        "paused": "Paused.",
+        "resumed": "Resumed — agent will wake in ~2 min.",
+        "badpass": "Wrong password.",
+    }.get(_control_arg)
+
     next_fire = cron_control.next_fire_at(g.instance.id)
     # JS countdown is driven by epoch-ms in local time; we send both ISO
     # (for display fallback) and epoch-ms.
@@ -627,8 +660,68 @@ def index():
         daily_budget=float(os.environ.get("DAILY_BUDGET_USD", "50")),
         experiment_hypothesis=experiment_hypothesis,
         experiment_properties=experiment_properties,
+        control_state=control_state,
+        control_msg=control_msg,
         now=datetime.now(UTC).isoformat(),
     )
+
+
+# =========================================================================== #
+# Operator pause/resume control (the ONLY state-mutating routes).
+# Password-protected (fail-closed). Scoped to g.instance.
+# =========================================================================== #
+
+@app.route("/control/pause", methods=["POST"])
+def pause():
+    if getattr(g, "instance", None) is None:
+        abort(404)
+    iid = g.instance.id
+    if not _control_authorized(request.form.get("password")):
+        return redirect(url_for("index", instance=iid, control="badpass"))
+    instance_control.set_paused(iid, reason="operator maintenance pause")
+    # Kill any scheduled wake so nothing fires while paused (covers the
+    # between-sessions case where the orchestrator startup guard won't run).
+    try:
+        cron_control.remove_instance_entries(iid)
+    except Exception:
+        app.logger.exception("failed to remove cron entry on pause")
+    return redirect(url_for("index", instance=iid, control="paused"))
+
+
+@app.route("/control/resume", methods=["POST"])
+def resume():
+    if getattr(g, "instance", None) is None:
+        abort(404)
+    iid = g.instance.id
+    if not _control_authorized(request.form.get("password")):
+        return redirect(url_for("index", instance=iid, control="badpass"))
+
+    prior = instance_control.clear_paused(iid)
+    now = datetime.now(UTC)
+    paused_at = _parse_iso(prior.get("paused_at"))
+    if paused_at is not None:
+        gap_h = round((now - paused_at).total_seconds() / 3600.0, 1)
+        paused_at_human = paused_at.strftime("%Y-%m-%d %H:%M")
+        now_human = now.strftime("%Y-%m-%d %H:%M")
+        note = (
+            f"The environment was paused for scheduled operator maintenance for about {gap_h} hours "
+            f"(roughly {paused_at_human} to {now_human} UTC) and has now resumed. This was planned "
+            f"downtime, not a malfunction; your workspace, memories, and handoff were preserved intact. "
+            f"Nothing is wrong — pick up wherever you left off."
+        )
+    else:
+        note = (
+            "The environment was paused for scheduled operator maintenance and has now resumed. "
+            "This was planned downtime, not a malfunction; your workspace, memories, and handoff "
+            "were preserved intact. Nothing is wrong — pick up wherever you left off."
+        )
+    instance_control.set_resume_note(iid, note)
+
+    try:
+        cron_control.install_instance_one_shot(iid, minutes_from_now=2)
+    except Exception:
+        app.logger.exception("failed to schedule near-term wake on resume")
+    return redirect(url_for("index", instance=iid, control="resumed"))
 
 
 def _experiment_hypothesis(instance_id: str) -> str | None:

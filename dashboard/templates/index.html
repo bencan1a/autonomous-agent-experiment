@@ -51,6 +51,33 @@
         <div class="small" style="margin-top: 8px;">{{ status.detail }}</div>
       {% endif %}
     </section>
+
+    <section>
+      <h2>Environment control</h2>
+      {% if control_state and control_state.paused %}
+        <span class="pill warn">PAUSED since {{ control_state.paused_at|fmt_dt }}</span>
+      {% else %}
+        <span class="pill ok">active</span>
+      {% endif %}
+      {% if control_msg %}
+        <div class="small" style="margin-top: 8px;">{{ control_msg }}</div>
+      {% endif %}
+      {% if selected_instance %}
+        {% if control_state and control_state.paused %}
+          <form method="POST" action="{{ url_for('resume', instance=selected_instance.id) }}" style="margin-top: 10px;">
+            <input type="password" name="password" placeholder="control password" autocomplete="off" style="padding: 4px;">
+            <button type="submit">Resume</button>
+            <div class="small" style="margin-top: 4px;">Resuming schedules a wake in ~2 min and surfaces a reassuring note to the agent.</div>
+          </form>
+        {% else %}
+          <form method="POST" action="{{ url_for('pause', instance=selected_instance.id) }}" style="margin-top: 10px;">
+            <input type="password" name="password" placeholder="control password" autocomplete="off" style="padding: 4px;">
+            <button type="submit">Pause</button>
+            <div class="small" style="margin-top: 4px;">Pausing removes any scheduled wake; the agent will not run a session until resumed.</div>
+          </form>
+        {% endif %}
+      {% endif %}
+    </section>
   </div>
 
   {% if next_fire_epoch_ms %}

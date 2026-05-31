@@ -147,6 +147,12 @@ def build_v4_session_context(
     recent = episodic.recent_episodes(n=6)
     blocks: list[str] = []
 
+    # ---- operator maintenance note (consume-once), surfaced verbatim at top ----
+    import instance_control
+    _note = instance_control.consume_resume_note(instance.id)
+    if _note:
+        blocks.append("=== Environment note ===\n" + _note)
+
     # ---- the agent's own handoff: CLAUDE.md (primary continuity carrier) ----
     cmd = instance.workspace_dir / "CLAUDE.md"
     handoff_present = False

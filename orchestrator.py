@@ -832,6 +832,15 @@ def main() -> int:
     log.info("Resolved instance %s (name=%s version=%s model=%s)",
              instance.id, instance.name, instance.version, instance.model)
 
+    import instance_control
+    if instance_control.is_paused(instance.id):
+        log.info("Instance %s is PAUSED (operator maintenance); removing any cron entry and exiting without running a session.", instance.id)
+        try:
+            cron_control.remove_instance_entries(instance.id)
+        except Exception:
+            log.exception("failed to remove cron entry while paused")
+        return 0
+
     if instance.version == "v1":
         return run_v1_session(instance)
     if instance.version == "v2":
