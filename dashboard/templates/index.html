@@ -459,6 +459,7 @@
             {% if e.type == 'work' %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>
             {% elif e.type == 'woke' %}<span class="pill ok">{{ e.icon }} {{ e.type }}</span>
             {% elif e.type == 'wind-down' %}<span class="pill warn">{{ e.icon }} {{ e.type }}</span>
+            {% elif e.type == 'capability' %}<span class="pill warn">{{ e.icon }} {{ e.type }}</span>
             {% elif e.type in ('idle', 'sleep') %}<span class="pill muted">{{ e.icon }} {{ e.type }}</span>
             {% else %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>{% endif %}
           </td>
@@ -466,12 +467,6 @@
             <div class="clamp10" title="{{ e.summary }}">{{ e.summary }}</div>
             {% if e.detail and e.detail.verbs %}
             <div class="small" style="margin-top:2px;"><span class="ts">did:</span> {{ e.detail.verbs }}</div>
-            {% endif %}
-            {% if e.detail and e.detail.internal_state %}
-            <div class="small clamp10" style="margin-top:4px;" title="{{ e.detail.internal_state }}"><span class="ts">felt:</span> {{ e.detail.internal_state }}</div>
-            {% endif %}
-            {% if e.detail and e.detail.journal %}
-            <div class="small clamp10" style="margin-top:4px;" title="{{ e.detail.journal }}"><span class="ts">journal:</span> {{ e.detail.journal }}</div>
             {% endif %}
             {% if e.detail and e.detail.tools %}
             <details style="margin-top:4px;">

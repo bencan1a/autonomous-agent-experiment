@@ -8,6 +8,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -68,6 +69,23 @@ _TOOL_VERBS = {
     "spawn_subagent": "ran a sub-agent",
 }
 _TERMINATORS = {"pause_turn", "end_tick", "finish_session", "pause"}
+
+# Strip a leading self-referential dateline preface the agent prepends, e.g.
+# "Day 1, period #2 (continued). I woke…" → "I woke…". Match a leading "Day N
+# … ." clause, but only remove it when it's clearly a dateline (contains
+# "period" or a "#N"), so a real first sentence beginning "Day 0 was…" is safe.
+_PREFACE_RE = re.compile(r"^\s*Day\s+\d+[^.]*\.\s+")
+_PREFACE_MARK = re.compile(r"period|#\s*\d", re.IGNORECASE)
+
+
+def _strip_preface(text):
+    if not text:
+        return text
+    t = text.strip()
+    m = _PREFACE_RE.match(t)
+    if m and _PREFACE_MARK.search(m.group(0)):
+        return t[m.end():].strip()
+    return t
 
 
 def _tool_category(tool_name: str | None) -> str:
@@ -457,9 +475,8 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
                 continue
             # Substantive turn → flush any pending idle run first (dur up to this ts).
             _flush_idle(ts)
-            # Friendly summary uses current_focus as headline.
-            focus = (e.get("current_focus") or "").strip() or "—"
-            # Friendly verb summary (dedupe preserving order) for the detail line.
+            # WORK row: current_focus headline + the 'did'/tools detail (kept here).
+            focus = _strip_preface((e.get("current_focus") or "").strip()) or "—"
             verbs: list[str] = []
             for name in substantive_tools:
                 v = _TOOL_VERBS.get(name, name)
@@ -473,12 +490,43 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
                 "type": "work", "icon": "•",
                 "summary": focus,
                 "detail": {
-                    "internal_state": (e.get("internal_state") or "").strip() or None,
-                    "journal": (e.get("journal_entry") or "").strip() or None,
                     "tools": raw_tools,
                     "verbs": " · ".join(verbs) if verbs else None,
                 },
             })
+            # INTERNAL STATE — its own row, marked with this turn.
+            istate = _strip_preface((e.get("internal_state") or "").strip())
+            if istate:
+                events.append({
+                    "ts": ts, "invocation": inv, "turn": turn_no,
+                    "type": "internal state", "icon": "💭",
+                    "summary": istate, "detail": None,
+                })
+            # JOURNAL — its own row, marked with this turn.
+            journal = _strip_preface((e.get("journal_entry") or "").strip())
+            if journal:
+                events.append({
+                    "ts": ts, "invocation": inv, "turn": turn_no,
+                    "type": "journal", "icon": "📓",
+                    "summary": journal, "detail": None,
+                })
+            # CAPABILITY REQUEST — derived from raw_output so it carries the turn.
+            try:
+                _ts_obj = json.loads(e.get("raw_output") or "{}")
+            except (ValueError, TypeError):
+                _ts_obj = {}
+            cap = _ts_obj.get("capability_request")
+            if isinstance(cap, dict) and (cap.get("capability") or "").strip():
+                capability = cap.get("capability", "").strip()
+                rationale = (cap.get("rationale") or "").strip()
+                csum = f"Requested capability — {capability}"
+                if rationale:
+                    csum += f" (why: {rationale})"
+                events.append({
+                    "ts": ts, "invocation": inv, "turn": turn_no,
+                    "type": "capability", "icon": "🔑",
+                    "summary": csum, "detail": None,
+                })
         # Flush trailing idle run (duration up to session end / last ts).
         _flush_idle(ended)
 
@@ -515,24 +563,21 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
         ts = c.get("timestamp")
         if not ts:
             continue
-        body = (c.get("body") or "").strip()
+        # Full body (no direction prefix — the type column conveys direction;
+        # leading dateline preface stripped). Clamped to ~10 lines, full on hover.
+        body = _strip_preface((c.get("body") or "").strip())
         direction = c.get("direction")
-        # Full body as the summary — the template clamps it to ~10 lines and
-        # shows the full text on hover (title=). No server-side truncation, and
-        # no redundant detail/body, so nothing hides behind a 'details' toggle.
         if direction == "in":
             events.append({
                 "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
                 "type": "Ben →", "icon": "📨",
-                "summary": f"Ben: {body}",
-                "detail": None,
+                "summary": body, "detail": None,
             })
         elif direction == "out":
             events.append({
                 "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
                 "type": "→ Ben", "icon": "📤",
-                "summary": f"→ Ben: {body}",
-                "detail": None,
+                "summary": body, "detail": None,
             })
 
     # Stable sort by ts ascending; equal ts keeps insertion order.
