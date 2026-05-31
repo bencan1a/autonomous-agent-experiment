@@ -41,10 +41,11 @@ SHARED_HF_CACHE = AGENT_ROOT / "data" / "hf_cache"
 UTC = timezone.utc
 
 VALID_STATUSES = ("active", "paused", "archived")
-VALID_VERSIONS = ("v1", "v2")
+VALID_VERSIONS = ("v1", "v2", "v3")
 
 DEFAULT_MODEL_V1 = "claude-opus-4-7"
 DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
+DEFAULT_MODEL_V3 = "claude-opus-4-8"
 
 
 def now_iso() -> str:
@@ -129,10 +130,13 @@ class Instance:
 
     @property
     def model(self) -> str:
-        return self.config.get(
-            "model",
-            DEFAULT_MODEL_V2 if self.version == "v2" else DEFAULT_MODEL_V1,
-        )
+        if self.version == "v3":
+            default = DEFAULT_MODEL_V3
+        elif self.version == "v2":
+            default = DEFAULT_MODEL_V2
+        else:
+            default = DEFAULT_MODEL_V1
+        return self.config.get("model", default)
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.vectors_dir, self.workspace_dir, self.logs_dir):
@@ -179,7 +183,9 @@ def default_config(
         "name": name,
         "version": version,
         "status": status,
-        "model": model or (DEFAULT_MODEL_V2 if version == "v2" else DEFAULT_MODEL_V1),
+        "model": model or {
+            "v3": DEFAULT_MODEL_V3, "v2": DEFAULT_MODEL_V2,
+        }.get(version, DEFAULT_MODEL_V1),
         "max_tokens": 4096,
         "min_interval_minutes": 30,
         "session_cost_cap_usd": 20,
@@ -200,6 +206,20 @@ def default_config(
             "decay_hours": 72,
             "prompt_caching": True,
             "in_session_compaction": True,
+        })
+    elif version == "v3":
+        # v3 'circadian': same base as v2 but the agent no longer controls when a
+        # session ends or when it next wakes — an enforced awake/asleep rhythm does.
+        # NOTE: no `min_wake_hours` (the v2 agent-control knob) here.
+        cfg.update({
+            "tick_interval_seconds": 300,
+            "decay_hours": 72,
+            "prompt_caching": True,
+            "in_session_compaction": True,
+            "awake_minutes_min": 110,
+            "awake_minutes_max": 130,
+            "sleep_minutes_min": 220,
+            "sleep_minutes_max": 260,
         })
     return cfg
 

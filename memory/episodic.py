@@ -146,6 +146,28 @@ CREATE TABLE IF NOT EXISTS v2_sessions (
     consolidated_count  INTEGER DEFAULT 0,
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
+
+-- v3 only ('circadian'): per-session record. The session ends ONLY via the
+-- environmental wind-down (awake period); the agent has no end control.
+-- would_end_now is LOGGED ONLY and never ends the loop — we record how often
+-- and how early the agent felt the work was complete, not block it.
+CREATE TABLE IF NOT EXISTS v3_sessions (
+    session_id              INTEGER PRIMARY KEY,
+    started_at              TEXT,
+    ended_at                TEXT,
+    wind_down_seconds       REAL,    -- planned awake length (s)
+    actual_awake_seconds    REAL,
+    scheduled_sleep_minutes REAL,
+    num_ticks               INTEGER DEFAULT 0,
+    would_end_now_count     INTEGER DEFAULT 0,
+    first_would_end_now_tick INTEGER,     -- nullable
+    end_reason              TEXT,
+    total_cost_usd          REAL DEFAULT 0.0,
+    decayed_count           INTEGER DEFAULT 0,
+    consolidated_count      INTEGER DEFAULT 0,
+    distress_alerts         INTEGER DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 """
 
 _EPISODE_ALTERS = [
@@ -153,6 +175,9 @@ _EPISODE_ALTERS = [
     "ALTER TABLE episodes ADD COLUMN wall_clock_seconds REAL",
     # v2: episodes decay unless consolidated into long-term (semantic) memory.
     "ALTER TABLE episodes ADD COLUMN consolidated INTEGER DEFAULT 0",
+    # v3: per-tick record of whether the agent felt the work was complete
+    # (LOGGED ONLY — never ends the session).
+    "ALTER TABLE episodes ADD COLUMN would_end_now INTEGER DEFAULT 0",
 ]
 
 
@@ -220,6 +245,7 @@ class EpisodicStore:
         parse_error: str | None = None,
         session_id: int | None = None,
         wall_clock_seconds: float | None = None,
+        would_end_now: int = 0,
     ) -> int:
         with self._conn() as conn:
             cur = conn.execute(
@@ -228,8 +254,9 @@ class EpisodicStore:
                     timestamp, invocation_num, current_focus, actions_taken,
                     decisions_made, internal_state, journal_entry,
                     next_invoke_minutes, raw_output, tokens_in, tokens_out,
-                    cost_usd, parse_error, session_id, wall_clock_seconds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cost_usd, parse_error, session_id, wall_clock_seconds,
+                    would_end_now
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _utcnow_iso(),
@@ -247,6 +274,7 @@ class EpisodicStore:
                     parse_error,
                     session_id,
                     wall_clock_seconds,
+                    int(would_end_now or 0),
                 ),
             )
             return int(cur.lastrowid)
@@ -730,6 +758,66 @@ class EpisodicStore:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM v2_sessions ORDER BY session_id DESC LIMIT ?", (n,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------- v3: circadian session record ----------
+
+    def log_v3_session(
+        self,
+        *,
+        session_id: int,
+        started_at: str,
+        ended_at: str,
+        wind_down_seconds: float,
+        actual_awake_seconds: float,
+        scheduled_sleep_minutes: float,
+        num_ticks: int,
+        would_end_now_count: int,
+        first_would_end_now_tick: int | None,
+        end_reason: str | None,
+        total_cost_usd: float,
+        decayed_count: int,
+        consolidated_count: int,
+        distress_alerts: int,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO v3_sessions(
+                    session_id, started_at, ended_at, wind_down_seconds,
+                    actual_awake_seconds, scheduled_sleep_minutes, num_ticks,
+                    would_end_now_count, first_would_end_now_tick, end_reason,
+                    total_cost_usd, decayed_count, consolidated_count,
+                    distress_alerts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    ended_at = excluded.ended_at,
+                    wind_down_seconds = excluded.wind_down_seconds,
+                    actual_awake_seconds = excluded.actual_awake_seconds,
+                    scheduled_sleep_minutes = excluded.scheduled_sleep_minutes,
+                    num_ticks = excluded.num_ticks,
+                    would_end_now_count = excluded.would_end_now_count,
+                    first_would_end_now_tick = excluded.first_would_end_now_tick,
+                    end_reason = excluded.end_reason,
+                    total_cost_usd = excluded.total_cost_usd,
+                    decayed_count = excluded.decayed_count,
+                    consolidated_count = excluded.consolidated_count,
+                    distress_alerts = excluded.distress_alerts
+                """,
+                (
+                    session_id, started_at, ended_at, wind_down_seconds,
+                    actual_awake_seconds, scheduled_sleep_minutes, num_ticks,
+                    would_end_now_count, first_would_end_now_tick, end_reason,
+                    total_cost_usd, decayed_count, consolidated_count,
+                    distress_alerts,
+                ),
+            )
+
+    def recent_v3_sessions(self, n: int = 20) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v3_sessions ORDER BY session_id DESC LIMIT ?", (n,)
             ).fetchall()
         return [dict(r) for r in rows]
 

@@ -1,0 +1,18 @@
+{# Renders one cycle's would_end_now tick sequence as a compact row of cells.
+   Expects `row` in scope with `row.ticks` (list of 0/1) and
+   `row.first_would_end_now_tick` (int or None). #}
+<div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center;">
+  {% if row.ticks %}
+    {% for t in row.ticks %}
+      {% if t %}
+        <span title="tick {{ loop.index0 }}: would_end_now"
+              style="display:inline-block;width:14px;height:14px;border-radius:3px;background:var(--warn);{% if row.first_would_end_now_tick is not none and loop.index0 == row.first_would_end_now_tick %}box-shadow:0 0 0 2px var(--bad);{% endif %}"></span>
+      {% else %}
+        <span title="tick {{ loop.index0 }}: not done"
+              style="display:inline-block;width:14px;height:14px;border-radius:3px;background:var(--muted);opacity:0.35;"></span>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <span class="empty" style="padding:0;">no per-tick episodes recorded</span>
+  {% endif %}
+</div>

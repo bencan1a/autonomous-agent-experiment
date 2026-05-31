@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Used only for budget tracking; off by a few cents is fine.
 _PRICING_USD_PER_MTOK = {
     # Opus 4.x family
+    "claude-opus-4-8": {"in": 15.0, "out": 75.0},
     "claude-opus-4-7": {"in": 15.0, "out": 75.0},
     "claude-opus-4-6": {"in": 15.0, "out": 75.0},
     "claude-opus-4-5": {"in": 15.0, "out": 75.0},

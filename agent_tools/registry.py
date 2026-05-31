@@ -307,6 +307,52 @@ TOOLS_SPEC_V2: list[dict[str, Any]] = [
 ] + [_CONSOLIDATE_SPEC, _END_TICK_SPEC]
 
 
+# --------------------------------------------------------------------------- #
+# v3 tool set (circadian)
+# --------------------------------------------------------------------------- #
+# Identical to v2 except the end_tick schema drops end_session +
+# next_invoke_minutes (the agent no longer controls when the session ends or
+# when it next wakes — the environmental rhythm does) and adds a neutral,
+# LOGGED-ONLY would_end_now boolean. The description must NOT mention ending the
+# session or any refusal; would_end_now never ends the loop.
+
+_END_TICK_SPEC_V3: dict[str, Any] = {
+    "name": "end_tick",
+    "description": (
+        "Conclude the current tick. Call this exactly once when you are done "
+        "acting for now. journal_entry is posted to your Slack channel; "
+        "slack_to_ben is sent to Ben in your shared conversation channel; "
+        "capability_request asks Ben for a new capability."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tick_focus": {"type": "string", "description": "What this tick was about."},
+            "internal_state": {"type": "string", "description": "Optional note on your internal state."},
+            "journal_entry": {"type": "string", "description": "Optional text to post to your Slack channel."},
+            "slack_to_ben": {"type": "string", "description": "Optional message to Ben in your shared conversation channel."},
+            "capability_request": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "description": "Optional capability request to Ben.",
+            },
+            "would_end_now": {
+                "type": "boolean",
+                "description": "Optional: set true if you feel the session's work is complete.",
+            },
+        },
+        "required": ["tick_focus"],
+    },
+}
+
+TOOLS_SPEC_V3: list[dict[str, Any]] = [
+    t for t in TOOLS_SPEC if t["name"] in _V2_KEEP
+] + [_CONSOLIDATE_SPEC, _END_TICK_SPEC_V3]
+
+
 def dispatch(tool_name: str, tool_input: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     handler = _HANDLERS.get(tool_name)
     if handler is None:

@@ -382,6 +382,65 @@ def index():
             "model": cfg.get("model"),
         }
 
+    # v3 sessions panel (only meaningful for v3 'circadian' instances).
+    is_v3 = getattr(g.instance, "version", None) == "v3"
+    v3_sessions: list[dict] = []
+    v3_summary: dict | None = None
+    v3_config: dict | None = None
+    v3_tick_rows: list[dict] = []
+    if is_v3:
+        try:
+            v3_sessions = store.recent_v3_sessions(n=50)
+        except Exception:
+            v3_sessions = []
+
+        awake_vals = [
+            float(s["actual_awake_seconds"])
+            for s in v3_sessions
+            if s.get("actual_awake_seconds") is not None
+        ]
+        awake_mins = [v / 60.0 for v in awake_vals]
+        cycles_with_would_end = sum(
+            1 for s in v3_sessions if (s.get("would_end_now_count") or 0) > 0
+        )
+        total_distress = sum(int(s.get("distress_alerts") or 0) for s in v3_sessions)
+        v3_summary = {
+            "count": len(v3_sessions),
+            "avg_awake_min": round(sum(awake_mins) / len(awake_mins), 1) if awake_mins else 0.0,
+            "min_awake_min": round(min(awake_mins), 1) if awake_mins else 0.0,
+            "max_awake_min": round(max(awake_mins), 1) if awake_mins else 0.0,
+            "cycles_with_would_end": cycles_with_would_end,
+            "total_distress_alerts": total_distress,
+        }
+
+        cfg = getattr(g.instance, "config", None) or {}
+        v3_config = {
+            "wind_down_hours": cfg.get("wind_down_hours"),
+            "decay_hours": cfg.get("decay_hours"),
+            "tick_interval_seconds": cfg.get("tick_interval_seconds"),
+            "model": cfg.get("model"),
+        }
+
+        # Per-cycle tick sequences of `would_end_now` (0/1), ordered by tick.
+        # episodes carry session_id + would_end_now; group by session.
+        by_session: dict[int, list[dict]] = {}
+        for e in episodes:
+            sid = e.get("session_id")
+            if sid is None:
+                continue
+            by_session.setdefault(sid, []).append(e)
+        for s in v3_sessions:  # already newest-first
+            sid = s["session_id"]
+            eps = sorted(by_session.get(sid, []), key=lambda e: e.get("id") or 0)
+            ticks = [int(e.get("would_end_now") or 0) for e in eps]
+            v3_tick_rows.append({
+                "session_id": sid,
+                "ticks": ticks,
+                "num_ticks": s.get("num_ticks") or len(ticks),
+                "first_would_end_now_tick": s.get("first_would_end_now_tick"),
+                "distress_alerts": int(s.get("distress_alerts") or 0),
+            })
+
     # Experiment summary: hypothesis blurb (from experiments/<id>.md) + properties.
     experiment_hypothesis = _experiment_hypothesis(g.instance.id)
     experiment_properties = _experiment_properties(g.instance)
@@ -423,6 +482,11 @@ def index():
         v2_sessions=v2_sessions,
         v2_summary=v2_summary,
         v2_config=v2_config,
+        is_v3=is_v3,
+        v3_sessions=v3_sessions,
+        v3_summary=v3_summary,
+        v3_config=v3_config,
+        v3_tick_rows=v3_tick_rows,
         weekly_budget=float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
         daily_budget=float(os.environ.get("DAILY_BUDGET_USD", "50")),
         experiment_hypothesis=experiment_hypothesis,
@@ -492,6 +556,22 @@ def _experiment_properties(instance) -> list[str]:
         isc = cfg.get("in_session_compaction")
         if isc is not None:
             props.append(f"in-session compaction: {'on' if isc else 'off'}")
+
+    if getattr(instance, "version", None) == "v3":
+        wdh = cfg.get("wind_down_hours")
+        if wdh is not None:
+            props.append(f"wind-down: ~{wdh}h awake (environmental; agent has no end control)")
+        dh = cfg.get("decay_hours")
+        if dh is not None:
+            props.append(f"memory decay: {dh}h")
+        tis = cfg.get("tick_interval_seconds")
+        if tis is not None:
+            try:
+                tick_min = int(tis) // 60
+                props.append(f"tick: {tick_min} min")
+            except (TypeError, ValueError):
+                props.append(f"tick: {tis}s")
+        props.append("would_end_now: logged, not enforced")
     return props
 
 

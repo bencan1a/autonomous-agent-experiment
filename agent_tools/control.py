@@ -38,23 +38,32 @@ def finish_session(
 
 def end_tick(
     tick_focus: str,
-    end_session: bool,
+    end_session: bool = False,
     internal_state: str | None = None,
     journal_entry: str | None = None,
     slack_to_ben: str | None = None,
     capability_request: dict | None = None,
     next_invoke_minutes: int | None = None,
+    would_end_now: bool | None = None,
     *,
     ctx: Any,
 ) -> dict[str, Any]:
-    """v2: conclude the current tick.
+    """v2/v3: conclude the current tick.
 
     Sets ``ctx.tick_state`` which breaks the tick's tool-use loop. The session
     loop then executes the declared side effects (journal -> agent channel,
     slack_to_ben -> DM, capability_request -> log + DM) and decides whether to
-    continue. ``end_session`` is honored immediately — there is no enforced
-    minimum (min_wake is logged only). ``next_invoke_minutes`` is read only on
-    the tick that ends the session.
+    continue.
+
+    v2: ``end_session`` is honored immediately — there is no enforced minimum
+    (min_wake is logged only). ``next_invoke_minutes`` is read only on the tick
+    that ends the session.
+
+    v3: the v3 tool schema exposes neither ``end_session`` nor
+    ``next_invoke_minutes`` — instead it offers ``would_end_now`` (a boolean the
+    agent may set when it feels the work is complete). ``would_end_now`` is
+    LOGGED ONLY; it NEVER ends the session. The session ends only when the
+    environmental waking period winds down.
     """
     ctx.tick_state = {
         "tick_focus": tick_focus,
@@ -64,6 +73,7 @@ def end_tick(
         "capability_request": capability_request,
         "end_session": bool(end_session),
         "next_invoke_minutes": next_invoke_minutes,
+        "would_end_now": would_end_now,
     }
     from datetime import datetime, timezone
     return {"acknowledged": True, "current_time_utc": datetime.now(timezone.utc).isoformat()}
