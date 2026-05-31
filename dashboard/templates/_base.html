@@ -154,6 +154,14 @@
   }
   details[open] > summary { margin-bottom: 6px; }
   .focus { color: var(--accent); }
+  /* Clamp long narrative text to ~10 lines; full text shown via title= on hover. */
+  .clamp10 {
+    display: -webkit-box;
+    -webkit-line-clamp: 10;
+    line-clamp: 10;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .stat-grid {
     display: grid;
