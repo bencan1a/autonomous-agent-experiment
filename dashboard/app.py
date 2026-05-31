@@ -327,6 +327,14 @@ def index():
     if current_session:
         all_curr = store.actions_for_session(current_session["id"])
         current_actions = list(reversed(all_curr))[:10]  # newest first
+        # The sessions row's total_tool_calls / total_cost_usd are only written
+        # at session END. For a running session, show LIVE values so the header
+        # doesn't read 0/$0 while activity is visible below.
+        current_session["total_tool_calls"] = len(all_curr)
+        try:
+            current_session["total_cost_usd"] = store.session_cost(current_session["id"])
+        except Exception:
+            pass
 
     # CLAUDE.md current text from filesystem (defensive)
     claude_md_current: str | None = None
