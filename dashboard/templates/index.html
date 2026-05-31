@@ -420,6 +420,71 @@
   </section>
   {% endif %}
 
+  {# ---------------- Integrated invocation timeline (the session, as a story) ---------------- #}
+  <section class="wide">
+    <h2>Invocation timeline <span class="small">(the session, as a story)</span></h2>
+    <form method="get" class="small" style="margin-bottom:8px;">
+      {# preserve instance selection #}
+      {% if selected_instance %}<input type="hidden" name="instance" value="{{ selected_instance.id }}">{% endif %}
+      <label>invocation:
+        <select name="tl" onchange="this.form.submit()">
+          <option value="all" {% if timeline_selected == 'all' %}selected{% endif %}>all</option>
+          {% for n in timeline_invocations %}
+            <option value="{{ n }}" {% if timeline_selected == n %}selected{% endif %}>#{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+    {% if not timeline_events %}
+      <div class="empty">No timeline events yet.</div>
+    {% else %}
+    <div class="scrollbox">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:170px">time</th>
+          <th style="width:50px">iter</th>
+          <th style="width:50px">turn</th>
+          <th style="width:110px">type</th>
+          <th>event</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in timeline_events %}
+        <tr>
+          <td>{{ e.ts|fmt_dt }}</td>
+          <td>#{{ e.invocation if e.invocation is not none else '—' }}</td>
+          <td>{{ e.turn if e.turn is not none else '—' }}</td>
+          <td>
+            {% if e.type == 'work' %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>
+            {% elif e.type == 'woke' %}<span class="pill ok">{{ e.icon }} {{ e.type }}</span>
+            {% elif e.type == 'wind-down' %}<span class="pill warn">{{ e.icon }} {{ e.type }}</span>
+            {% elif e.type in ('idle', 'sleep') %}<span class="pill muted">{{ e.icon }} {{ e.type }}</span>
+            {% else %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>{% endif %}
+          </td>
+          <td class="focus">
+            {{ e.summary }}
+            {% if e.detail and e.detail.verbs %}
+            <div class="small" style="margin-top:2px;"><span class="ts">did:</span> {{ e.detail.verbs }}</div>
+            {% endif %}
+            {% if e.detail and (e.detail.internal_state or e.detail.journal or e.detail.tools or e.detail.body) %}
+            <details style="margin-top:4px;">
+              <summary class="small">details</summary>
+              {% if e.detail.internal_state %}<div class="small"><span class="ts">felt:</span> {{ e.detail.internal_state }}</div>{% endif %}
+              {% if e.detail.journal %}<div class="small"><span class="ts">journal:</span> {{ e.detail.journal }}</div>{% endif %}
+              {% if e.detail.tools %}<div class="small"><span class="ts">tools:</span> {{ e.detail.tools|join(' · ') }}</div>{% endif %}
+              {% if e.detail.body %}<div class="small"><span class="ts">body:</span> {{ e.detail.body }}</div>{% endif %}
+            </details>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+  </section>
+
   {# ---------------- Internal state over time ---------------- #}
   <section class="wide">
     <h2>Internal state over time</h2>
@@ -565,47 +630,6 @@
       </div>
     {% else %}
       <div class="empty">No actions logged.</div>
-    {% endif %}
-  </section>
-
-  {# ---------------- Invocation timeline ---------------- #}
-  <section class="wide">
-    <h2>Invocation timeline</h2>
-    {% if not episodes %}
-      <div class="empty">No episodes logged yet.</div>
-    {% else %}
-    <div class="scrollbox">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:60px">#</th>
-          <th style="width:170px">timestamp</th>
-          <th>focus</th>
-          <th>internal_state</th>
-          <th style="width:90px">next (min)</th>
-          <th style="width:100px">cost</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for e in episodes %}
-        <tr>
-          <td>
-            <span class="num">#{{ e.invocation_num }}</span>
-            {% if e.consolidated %}<span class="pill dim" title="consolidated into long-term memory">consolidated</span>{% endif %}
-          </td>
-          <td>{{ e.timestamp|fmt_dt }}</td>
-          <td class="focus">{{ e.current_focus or '—' }}</td>
-          <td>{{ e.internal_state or '—' }}</td>
-          <td>{{ e.next_invoke_minutes if e.next_invoke_minutes is not none else '—' }}</td>
-          <td>${{ '%.4f'|format(e.cost_usd or 0) }}</td>
-        </tr>
-        {% if e.parse_error %}
-        <tr><td colspan="6"><span class="pill bad">parse_error</span> {{ e.parse_error }}</td></tr>
-        {% endif %}
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
     {% endif %}
   </section>
 

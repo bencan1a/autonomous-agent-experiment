@@ -58,6 +58,18 @@ _TOOL_CATEGORIES = [
 ]
 
 
+_TOOL_VERBS = {
+    "web_search": "browsed the web", "fetch_url": "browsed the web",
+    "write_file": "wrote files", "write_claude_md": "updated notes-to-self",
+    "read_file": "read files", "read_claude_md": "read notes-to-self",
+    "list_directory": "read files", "delete_file": "deleted files",
+    "query_episodic_memory": "recalled memory", "recent_episodes": "recalled memory",
+    "consolidate": "saved memories to long-term",
+    "spawn_subagent": "ran a sub-agent",
+}
+_TERMINATORS = {"pause_turn", "end_tick", "finish_session", "pause"}
+
+
 def _tool_category(tool_name: str | None) -> str:
     if not tool_name:
         return "cat-other"
@@ -303,6 +315,245 @@ def _tool_counts(actions: list[dict]) -> list[tuple[str, int]]:
     for a in actions:
         c[a.get("tool_name") or "(unknown)"] += 1
     return c.most_common()
+
+
+def _parse_actions(actions_taken) -> list[tuple[str, int]]:
+    """Parse an episode's actions_taken (JSON string array) into (tool, count) pairs.
+
+    Items look like "write_file (5)" or "pause_turn". Tolerates None/garbage → [].
+    """
+    raw = actions_taken
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str, int]] = []
+    for item in raw:
+        s = str(item).strip()
+        if not s:
+            continue
+        name = s.split(" (")[0].strip()
+        count = 1
+        if " (" in s and s.endswith(")"):
+            try:
+                count = int(s.split(" (")[1].rstrip(")"))
+            except (ValueError, IndexError):
+                count = 1
+        out.append((name, count))
+    return out
+
+
+def _build_invocation_timeline(store, *, invocation=None) -> dict:
+    """Assemble a narrative, chronological timeline of the agent's life.
+
+    Returns {"events": [...], "invocations": [ints desc], "selected": int|'all'|None}.
+    Read-only. `invocation` may be None (default → latest), an int, or 'all'.
+    """
+    episodes = store.all_episodes()  # ascending by id
+
+    # Group episodes by session, preserving session order by first-seen id.
+    sessions_order: list = []
+    eps_by_session: dict = {}
+    for e in episodes:
+        sid = e.get("session_id")
+        if sid is None:
+            continue
+        if sid not in eps_by_session:
+            eps_by_session[sid] = []
+            sessions_order.append(sid)
+        eps_by_session[sid].append(e)
+    for sid in eps_by_session:
+        eps_by_session[sid].sort(key=lambda e: e.get("id") or 0)
+
+    # Session rows keyed by id (started_at / ended_at / total_cost / invocation_num).
+    try:
+        session_rows = {s["id"]: s for s in store.recent_sessions(n=1000)}
+    except Exception:
+        session_rows = {}
+
+    # Ben contacts (exclude observer_channel mirror noise).
+    try:
+        ben = [
+            c for c in store.ben_contact_history(limit=100000)
+            if c.get("channel") != "observer_channel"
+        ]
+    except Exception:
+        ben = []
+
+    events: list[dict] = []
+
+    def _trunc(s: str, n: int = 140) -> str:
+        s = s or ""
+        return s if len(s) <= n else s[:n].rstrip() + "…"
+
+    # Determine the invocation of the session that ENDS before each session starts,
+    # for attaching sleep events. Build session metadata per session in order.
+    session_meta: list[dict] = []
+    for sid in sessions_order:
+        eps = eps_by_session[sid]
+        row = session_rows.get(sid, {})
+        inv = row.get("invocation_num")
+        if inv is None:
+            inv = next((e.get("invocation_num") for e in eps if e.get("invocation_num") is not None), None)
+        started = row.get("started_at") or (eps[0].get("timestamp") if eps else None)
+        ended = row.get("ended_at")
+        if ended is None and eps:
+            ended = eps[-1].get("timestamp")
+        session_meta.append({
+            "sid": sid, "inv": inv, "eps": eps,
+            "started": started, "ended": ended,
+            "cost": row.get("total_cost_usd"),
+        })
+
+    for mi, meta in enumerate(session_meta):
+        sid = meta["sid"]
+        inv = meta["inv"]
+        eps = meta["eps"]
+        started = meta["started"]
+        ended = meta["ended"]
+
+        # session_start
+        if started:
+            events.append({
+                "ts": started, "invocation": inv, "turn": None,
+                "type": "woke", "icon": "☀",
+                "summary": f"Woke — session {inv}" if inv is not None else "Woke",
+                "detail": None,
+            })
+
+        # Walk turns, merging consecutive idle turns.
+        idle_run: list[dict] = []  # episodes in the current idle run
+        idle_start_ts = None
+
+        def _flush_idle(next_ts):
+            nonlocal idle_run, idle_start_ts
+            if not idle_run:
+                return
+            n = len(idle_run)
+            end_for_dur = next_ts or idle_run[-1].get("timestamp")
+            dur = _duration_str(idle_start_ts, end_for_dur)
+            s = "s" if n != 1 else ""
+            events.append({
+                "ts": idle_start_ts, "invocation": inv, "turn": None,
+                "type": "idle", "icon": "💤",
+                "summary": f"Rested ~{dur} ({n} idle turn{s})",
+                "detail": None,
+            })
+            idle_run = []
+            idle_start_ts = None
+
+        for turn_no, e in enumerate(eps, start=1):
+            parsed = _parse_actions(e.get("actions_taken"))
+            substantive_tools = [name for (name, _c) in parsed if name not in _TERMINATORS]
+            is_substantive = len(substantive_tools) > 0
+            ts = e.get("timestamp")
+            if not is_substantive:
+                if not idle_run:
+                    idle_start_ts = ts
+                idle_run.append(e)
+                continue
+            # Substantive turn → flush any pending idle run first (dur up to this ts).
+            _flush_idle(ts)
+            # Friendly summary uses current_focus as headline.
+            focus = (e.get("current_focus") or "").strip() or "—"
+            # Friendly verb summary (dedupe preserving order) for the detail line.
+            verbs: list[str] = []
+            for name in substantive_tools:
+                v = _TOOL_VERBS.get(name, name)
+                if v not in verbs:
+                    verbs.append(v)
+            raw_tools = []
+            for (name, c) in parsed:
+                raw_tools.append(f"{name} ({c})" if c and c != 1 else name)
+            events.append({
+                "ts": ts, "invocation": inv, "turn": turn_no,
+                "type": "work", "icon": "•",
+                "summary": focus,
+                "detail": {
+                    "internal_state": (e.get("internal_state") or "").strip() or None,
+                    "journal": (e.get("journal_entry") or "").strip() or None,
+                    "tools": raw_tools,
+                    "verbs": " · ".join(verbs) if verbs else None,
+                },
+            })
+        # Flush trailing idle run (duration up to session end / last ts).
+        _flush_idle(ended)
+
+        # session_end
+        if ended:
+            n_turns = len(eps)
+            try:
+                cost = float(meta["cost"] or 0.0)
+            except (TypeError, ValueError):
+                cost = 0.0
+            events.append({
+                "ts": ended, "invocation": inv, "turn": None,
+                "type": "wind-down", "icon": "⏹",
+                "summary": f"Wound down — {n_turns} turns, ${cost:.2f}",
+                "detail": None,
+            })
+
+        # sleep between this session's ended_at and NEXT session's started_at.
+        if mi + 1 < len(session_meta):
+            nxt = session_meta[mi + 1]
+            if ended and nxt["started"]:
+                a = _parse_iso(ended)
+                b = _parse_iso(nxt["started"])
+                if a and b and (b - a).total_seconds() > 0:
+                    events.append({
+                        "ts": ended, "invocation": inv, "turn": None,
+                        "type": "sleep", "icon": "😴",
+                        "summary": f"Slept ~{_duration_str(ended, nxt['started'])}",
+                        "detail": None,
+                    })
+
+    # Ben contact events.
+    for c in ben:
+        ts = c.get("timestamp")
+        if not ts:
+            continue
+        body = (c.get("body") or "").strip()
+        direction = c.get("direction")
+        if direction == "in":
+            events.append({
+                "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
+                "type": "Ben →", "icon": "📨",
+                "summary": f"Ben: {_trunc(body)}",
+                "detail": {"body": body} if body else None,
+            })
+        elif direction == "out":
+            events.append({
+                "ts": ts, "invocation": c.get("invocation_num"), "turn": None,
+                "type": "→ Ben", "icon": "📤",
+                "summary": f"→ Ben: {_trunc(body)}",
+                "detail": {"body": body} if body else None,
+            })
+
+    # Stable sort by ts ascending; equal ts keeps insertion order.
+    events_indexed = list(enumerate(events))
+    events_indexed.sort(key=lambda pair: (_parse_iso(pair[1]["ts"]) or datetime.min.replace(tzinfo=UTC), pair[0]))
+    events = [e for _i, e in events_indexed]
+
+    invocations = sorted(
+        {e.get("invocation_num") for e in episodes if e.get("invocation_num") is not None},
+        reverse=True,
+    )
+
+    # Resolve selected.
+    if invocation == "all":
+        selected = "all"
+    elif isinstance(invocation, int) and invocation in invocations:
+        selected = invocation
+    else:
+        selected = invocations[0] if invocations else None
+
+    if selected != "all" and selected is not None:
+        events = [e for e in events if e.get("invocation") == selected]
+
+    return {"events": events, "invocations": invocations, "selected": selected}
 
 
 @app.route("/")
@@ -610,6 +861,16 @@ def index():
         "badpass": "Wrong password.",
     }.get(_control_arg)
 
+    # Integrated invocation timeline (narrative view). Filter via ?tl=<int|all>.
+    _tl_arg = request.args.get("tl")
+    if _tl_arg == "all":
+        _tl_parsed = "all"
+    elif _tl_arg and _tl_arg.isdigit():
+        _tl_parsed = int(_tl_arg)
+    else:
+        _tl_parsed = None
+    timeline = _build_invocation_timeline(store, invocation=_tl_parsed)
+
     next_fire = cron_control.next_fire_at(g.instance.id)
     # JS countdown is driven by epoch-ms in local time; we send both ISO
     # (for display fallback) and epoch-ms.
@@ -661,6 +922,9 @@ def index():
         experiment_properties=experiment_properties,
         control_state=control_state,
         control_msg=control_msg,
+        timeline_events=timeline["events"],
+        timeline_invocations=timeline["invocations"],
+        timeline_selected=timeline["selected"],
         now=datetime.now(UTC).isoformat(),
     )
 
