@@ -1,7 +1,7 @@
 # Tool Spec — `fetch_url` (retrieve & read HTML/PDF primary sources)
 
-**Status:** SPEC (approved decisions baked in — awaiting a prerequisite side-task
-from Ben before implementation; do NOT build yet)
+**Status:** IMPLEMENTED (2026-05-31, commit 31e39e9). Tool live in v2/v3/v4
+toolsets; capability_request id=1 marked granted. Takes effect at v4's next wake.
 **Origin:** v4-continuous capability_request (session 1) — `web_search` returns only
 snippets, so the agent cannot verify figures against primary PDFs/papers; it is
 forced to label numbers "snippet-sourced, unverified." This closes that gap.
