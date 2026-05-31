@@ -2,6 +2,10 @@ anthropic>=0.40.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 
+# fetch_url: HTML main-content + PDF text/table extraction
+trafilatura>=1.8.0
+pdfplumber>=0.11.0
+
 # Memory
 sentence-transformers>=3.0.0
 torch>=2.4.0

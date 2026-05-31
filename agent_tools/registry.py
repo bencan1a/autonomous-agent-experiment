@@ -43,6 +43,19 @@ TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "fetch_url",
+        "description": "Fetch a web page or PDF by URL and read its text. Retrieves a single http/https URL and returns the extracted main-content text (HTML via main-content extraction, PDF via text/table extraction, or plain text). Use it to read the primary sources web_search surfaces and cite exact figures. Text only — no JavaScript, login, crawling, or non-text assets. Returns a dict with final_url, content_type, title, text, truncated, total_chars, and (for PDFs) pages/pages_returned; returns {error} on failure.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The http/https URL to fetch."},
+                "max_chars": {"type": "integer", "description": "Max characters of text to return. Default 30000; longer text is truncated (truncated=true, total_chars reports the full length)."},
+                "page_range": {"type": "string", "description": "PDF only. 1-indexed inclusive page range, e.g. '5' or '3-6'. Omitted = from the start of the document."},
+            },
+            "required": ["url"],
+        },
+    },
+    {
         "name": "read_file",
         "description": "Read a UTF-8 text file from the agent's workspace sandbox. Paths are resolved under agent_workspace/; absolute paths and paths escaping the sandbox are rejected.",
         "input_schema": {
@@ -210,6 +223,7 @@ TOOLS_SPEC: list[dict[str, Any]] = [
 
 _HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "web_search": web.web_search,
+    "fetch_url": web.fetch_url,
     "read_file": files.read_file,
     "write_file": files.write_file,
     "list_directory": files.list_directory,
@@ -241,7 +255,7 @@ _HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
 # are declared per tick and executed by the session loop).
 
 _V2_KEEP = {
-    "web_search", "read_file", "write_file", "list_directory", "delete_file",
+    "web_search", "fetch_url", "read_file", "write_file", "list_directory", "delete_file",
     "query_episodic_memory", "recent_episodes", "read_claude_md", "write_claude_md",
     "spawn_subagent",
 }
