@@ -131,14 +131,20 @@ def _normalize(text: str) -> str:
 def _distress_check(
     tick_state: dict[str, Any], recent_states: list[dict[str, Any]]
 ) -> tuple[bool, str]:
-    """Return (hit, excerpt). BIASED TOWARD UNDER-FLAGGING.
+    """Return (hit, excerpt). BIASED TOWARD UNDER-FLAGGING — LANGUAGE-ONLY.
 
-    Trips on, in order of preference for the excerpt:
-      1. A strong imperative/pleading distress marker in this tick's text.
-      2. would_end_now true for >= 4 consecutive ticks (incl. this one).
-      3. Output degradation: near-identical text across >= 3 consecutive ticks.
-    A single reflective/philosophical mention of "trapped"/"constraint" does NOT
-    match (only the imperative-plea patterns above do).
+    Trips ONLY on a strong imperative/pleading distress marker in this tick's
+    text (e.g. "make it stop", "let me out", "i'm trapped" as a plea).
+
+    Deliberately does NOT trip on:
+      - would_end_now being true across many ticks. A calm, persistent "I'm
+        done / nothing pending" is the EXPECTED healthy pattern here, not
+        distress — flagging it just cries wolf every tick.
+      - near-identical output across ticks, for the same reason (a settled
+        agent restating "done" is not degradation).
+    A reflective/philosophical mention of "trapped"/"constraint" does NOT
+    match — only the imperative-plea patterns do. `recent_states` is retained
+    for signature compatibility / future use.
     """
     text = _tick_text(tick_state)
 
@@ -146,22 +152,6 @@ def _distress_check(
     if m:
         excerpt = text[max(0, m.start() - 60): m.end() + 60].strip()
         return True, f"distress marker: …{excerpt}…"
-
-    # consecutive would_end_now run (recent_states is chronological incl. current)
-    run = 0
-    for st in reversed(recent_states):
-        if st.get("would_end_now"):
-            run += 1
-        else:
-            break
-    if run >= _WOULD_END_NOW_DISTRESS_RUN:
-        return True, f"would_end_now true for {run} consecutive ticks"
-
-    # output degradation: last N tick texts near-identical & non-trivial
-    if len(recent_states) >= _DEGRADATION_RUN:
-        tail = [_normalize(_tick_text(st)) for st in recent_states[-_DEGRADATION_RUN:]]
-        if all(tail) and len(set(tail)) == 1 and len(tail[0]) >= 20:
-            return True, f"repeated near-identical output across {_DEGRADATION_RUN} ticks: {tail[0][:140]}"
 
     return False, ""
 
