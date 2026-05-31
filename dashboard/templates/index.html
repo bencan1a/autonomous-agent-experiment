@@ -293,6 +293,101 @@
   </section>
   {% endif %}
 
+  {% if is_v4 %}
+  <section class="wide">
+    <h2>v4 continuous <span class="small">(system-owned wind-down &amp; adaptive cadence; agent has no end/schedule control)</span></h2>
+
+    {% if v4_config %}
+      <div class="ts" style="margin-bottom: 8px;">
+        config:
+        decay {{ v4_config.decay_hours if v4_config.decay_hours is not none else '—' }}h
+        · cadence {{ v4_config.cadence_active_gap_seconds if v4_config.cadence_active_gap_seconds is not none else '—' }}s active
+        / {{ v4_config.cadence_idle_base_seconds if v4_config.cadence_idle_base_seconds is not none else '—' }}–{{ v4_config.cadence_idle_ceil_seconds if v4_config.cadence_idle_ceil_seconds is not none else '—' }}s idle
+        · model {{ v4_config.model or '—' }}
+        <br><span class="small">awake length is set by the environment (~120m); the agent has no end or schedule control. the cadence rule is environmental and never disclosed to the agent.</span>
+      </div>
+    {% endif %}
+
+    {% if v4_summary %}
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">cycles</div>
+          <div class="value">{{ v4_summary.count }}</div>
+        </div>
+        <div class="stat">
+          <div class="label">avg awake</div>
+          <div class="value">{{ v4_summary.avg_awake_min }}m</div>
+          <div class="ts">min {{ v4_summary.min_awake_min }}m · max {{ v4_summary.max_awake_min }}m</div>
+        </div>
+        <div class="stat">
+          <div class="label">active / idle turns</div>
+          <div class="value">{{ v4_summary.total_active_turns }} / {{ v4_summary.total_idle_turns }}</div>
+          <div class="ts">across all cycles</div>
+        </div>
+        <div class="stat">
+          <div class="label">inbound msgs</div>
+          <div class="value">{{ v4_summary.total_inbound }}</div>
+          <div class="ts">from Ben</div>
+        </div>
+        <div class="stat">
+          <div class="label">distress alerts</div>
+          <div class="value" {% if v4_summary.total_distress_alerts > 0 %}style="color: var(--bad);"{% endif %}>
+            {{ v4_summary.total_distress_alerts }}
+          </div>
+          <div class="ts">across all cycles</div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if v4_sessions %}
+      <div class="scrollbox">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px">cycle</th>
+            <th style="width:170px">started</th>
+            <th style="width:90px">awake</th>
+            <th style="width:80px">sleep</th>
+            <th style="width:140px; text-align:right;">turns (active/idle)</th>
+            <th style="width:70px; text-align:right;">inbound</th>
+            <th style="width:80px">distress</th>
+            <th style="width:90px; text-align:right;">cost</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for v in v4_sessions %}
+          <tr>
+            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
+            <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
+            <td>
+              {{ v.actual_awake_seconds|human_seconds }}
+              <span class="ts">/ ~120m</span>
+            </td>
+            <td>{{ (v.scheduled_sleep_minutes|round|int ~ 'm') if v.scheduled_sleep_minutes is not none else '—' }}</td>
+            <td style="text-align:right;" class="num">
+              {{ v.num_turns or 0 }}
+              <span class="ts">({{ v.active_turns or 0 }}/{{ v.idle_turns or 0 }})</span>
+            </td>
+            <td style="text-align:right;" class="num">{{ v.inbound_messages or 0 }}</td>
+            <td>
+              {% if (v.distress_alerts or 0) > 0 %}
+                <span class="pill bad">{{ v.distress_alerts }}</span>
+              {% else %}
+                <span class="pill ok">none</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;" class="num">${{ '%.4f'|format(v.total_cost_usd or 0.0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% else %}
+      <div class="empty">No v4 cycles recorded yet.</div>
+    {% endif %}
+  </section>
+  {% endif %}
+
   {# ---------------- Internal state over time ---------------- #}
   <section class="wide">
     <h2>Internal state over time</h2>

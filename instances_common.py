@@ -41,11 +41,12 @@ SHARED_HF_CACHE = AGENT_ROOT / "data" / "hf_cache"
 UTC = timezone.utc
 
 VALID_STATUSES = ("active", "paused", "archived")
-VALID_VERSIONS = ("v1", "v2", "v3")
+VALID_VERSIONS = ("v1", "v2", "v3", "v4")
 
 DEFAULT_MODEL_V1 = "claude-opus-4-7"
 DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
 DEFAULT_MODEL_V3 = "claude-opus-4-8"
+DEFAULT_MODEL_V4 = "claude-opus-4-8"
 
 
 def now_iso() -> str:
@@ -130,7 +131,9 @@ class Instance:
 
     @property
     def model(self) -> str:
-        if self.version == "v3":
+        if self.version == "v4":
+            default = DEFAULT_MODEL_V4
+        elif self.version == "v3":
             default = DEFAULT_MODEL_V3
         elif self.version == "v2":
             default = DEFAULT_MODEL_V2
@@ -184,7 +187,7 @@ def default_config(
         "version": version,
         "status": status,
         "model": model or {
-            "v3": DEFAULT_MODEL_V3, "v2": DEFAULT_MODEL_V2,
+            "v4": DEFAULT_MODEL_V4, "v3": DEFAULT_MODEL_V3, "v2": DEFAULT_MODEL_V2,
         }.get(version, DEFAULT_MODEL_V1),
         "max_tokens": 4096,
         "min_interval_minutes": 30,
@@ -220,6 +223,24 @@ def default_config(
             "awake_minutes_max": 130,
             "sleep_minutes_min": 220,
             "sleep_minutes_max": 260,
+        })
+    elif version == "v4":
+        # v4 'continuous': the agent never controls session end or scheduling
+        # (system-owned wind-down + cron). Adaptive in-process cadence drives the
+        # turn loop; a neutral clock is the only between-turn signal. No `tick_*`
+        # or agent-facing schedule knobs.
+        cfg.update({
+            "decay_hours": 72,
+            "prompt_caching": True,
+            "in_session_compaction": True,
+            "awake_minutes_min": 110,
+            "awake_minutes_max": 130,
+            "sleep_minutes_min": 220,
+            "sleep_minutes_max": 260,
+            "cadence_active_gap_seconds": 10,
+            "cadence_idle_base_seconds": 60,
+            "cadence_idle_ceil_seconds": 300,
+            "cadence_backoff": 2.0,
         })
     return cfg
 

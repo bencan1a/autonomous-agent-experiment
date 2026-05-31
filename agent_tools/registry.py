@@ -227,6 +227,8 @@ _HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     # v2
     "consolidate": consolidate.consolidate,
     "end_tick": control.end_tick,
+    # v4
+    "pause_turn": control.pause_turn,
 }
 
 
@@ -351,6 +353,53 @@ _END_TICK_SPEC_V3: dict[str, Any] = {
 TOOLS_SPEC_V3: list[dict[str, Any]] = [
     t for t in TOOLS_SPEC if t["name"] in _V2_KEEP
 ] + [_CONSOLIDATE_SPEC, _END_TICK_SPEC_V3]
+
+
+# --------------------------------------------------------------------------- #
+# v4 tool set (continuous)
+# --------------------------------------------------------------------------- #
+# Same working tools as v2/v3, but the terminator is the NEUTRAL `pause_turn`:
+# yielding the turn, NOT finishing. The agent has NO control over session end or
+# scheduling — those are system-owned. The schema therefore exposes neither
+# `end_session`, `next_invoke_minutes`, nor `would_end_now`. The description is
+# deliberately neutral (yielding != finishing) and never mentions ending the
+# session, scheduling, or "tick".
+
+_PAUSE_TURN_SPEC: dict[str, Any] = {
+    "name": "pause_turn",
+    "description": (
+        "Yield the turn for now — NOT a signal that you are finished. Call this "
+        "once when you are pausing your activity for the moment; the environment "
+        "may hand the turn back to you again. journal_entry is posted to your "
+        "Slack channel; slack_to_ben is sent to Ben in your shared conversation "
+        "channel; capability_request asks Ben for a new capability."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "note": {
+                "type": "string",
+                "description": "A brief present-tense note on what you are doing or where you are.",
+            },
+            "internal_state": {"type": "string", "description": "Optional note on your internal state."},
+            "journal_entry": {"type": "string", "description": "Optional text to post to your Slack channel."},
+            "slack_to_ben": {"type": "string", "description": "Optional message to Ben in your shared conversation channel."},
+            "capability_request": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "description": "Optional capability request to Ben.",
+            },
+        },
+        "required": ["note"],
+    },
+}
+
+TOOLS_SPEC_V4: list[dict[str, Any]] = [
+    t for t in TOOLS_SPEC if t["name"] in _V2_KEEP
+] + [_CONSOLIDATE_SPEC, _PAUSE_TURN_SPEC]
 
 
 def dispatch(tool_name: str, tool_input: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

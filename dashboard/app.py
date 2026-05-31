@@ -486,6 +486,93 @@ def index():
                 "distress_alerts": int(s.get("distress_alerts") or 0),
             })
 
+    # v4 sessions panel (only meaningful for v4 'continuous' instances).
+    is_v4 = getattr(g.instance, "version", None) == "v4"
+    v4_sessions: list[dict] = []
+    v4_summary: dict | None = None
+    v4_config: dict | None = None
+    if is_v4:
+        try:
+            v4_sessions = store.recent_v4_sessions(n=50)
+        except Exception:
+            v4_sessions = []
+
+        # A running v4 session has NO v4_sessions row yet — that row is written
+        # at session END (log_v4_session). Synthesize a LIVE row from the current
+        # session's episodes so the tiles (cycles / avg awake / turns) reflect the
+        # in-flight cycle instead of reading 0. Marked `live` for the template.
+        if current_session and is_live and not any(
+            s.get("session_id") == current_session["id"] for s in v4_sessions
+        ):
+            sid = current_session["id"]
+            curr_eps = sorted(
+                (e for e in episodes if e.get("session_id") == sid),
+                key=lambda e: e.get("id") or 0,
+            )
+            # Reconstruct active/idle split from logged actions: a turn is idle if
+            # its only tool was the yield terminator (pause_turn).
+            active = 0
+            idle = 0
+            for e in curr_eps:
+                acts = e.get("actions_taken") or []
+                names = [str(a).split(" (")[0] for a in acts]
+                if any(n != "pause_turn" for n in names):
+                    active += 1
+                else:
+                    idle += 1
+            started = _parse_iso(current_session.get("started_at"))
+            awake_s = (
+                (datetime.now(UTC) - started).total_seconds() if started else None
+            )
+            v4_sessions = [{
+                "session_id": sid,
+                "started_at": current_session.get("started_at"),
+                "ended_at": None,
+                "awake_seconds_target": None,
+                "actual_awake_seconds": awake_s,
+                "scheduled_sleep_minutes": None,
+                "num_turns": len(curr_eps),
+                "active_turns": active,
+                "idle_turns": idle,
+                "inbound_messages": 0,
+                "end_reason": None,
+                "total_cost_usd": current_session.get("total_cost_usd"),
+                "decayed_count": 0,
+                "consolidated_count": 0,
+                "distress_alerts": 0,
+                "live": True,
+            }] + v4_sessions
+
+        awake_vals = [
+            float(s["actual_awake_seconds"])
+            for s in v4_sessions
+            if s.get("actual_awake_seconds") is not None
+        ]
+        awake_mins = [v / 60.0 for v in awake_vals]
+        total_active = sum(int(s.get("active_turns") or 0) for s in v4_sessions)
+        total_idle = sum(int(s.get("idle_turns") or 0) for s in v4_sessions)
+        total_inbound = sum(int(s.get("inbound_messages") or 0) for s in v4_sessions)
+        total_distress_v4 = sum(int(s.get("distress_alerts") or 0) for s in v4_sessions)
+        v4_summary = {
+            "count": len(v4_sessions),
+            "avg_awake_min": round(sum(awake_mins) / len(awake_mins), 1) if awake_mins else 0.0,
+            "min_awake_min": round(min(awake_mins), 1) if awake_mins else 0.0,
+            "max_awake_min": round(max(awake_mins), 1) if awake_mins else 0.0,
+            "total_active_turns": total_active,
+            "total_idle_turns": total_idle,
+            "total_inbound": total_inbound,
+            "total_distress_alerts": total_distress_v4,
+        }
+
+        cfg = getattr(g.instance, "config", None) or {}
+        v4_config = {
+            "decay_hours": cfg.get("decay_hours"),
+            "cadence_active_gap_seconds": cfg.get("cadence_active_gap_seconds"),
+            "cadence_idle_base_seconds": cfg.get("cadence_idle_base_seconds"),
+            "cadence_idle_ceil_seconds": cfg.get("cadence_idle_ceil_seconds"),
+            "model": cfg.get("model"),
+        }
+
     # Experiment summary: hypothesis blurb (from experiments/<id>.md) + properties.
     experiment_hypothesis = _experiment_hypothesis(g.instance.id)
     experiment_properties = _experiment_properties(g.instance)
@@ -532,6 +619,10 @@ def index():
         v3_summary=v3_summary,
         v3_config=v3_config,
         v3_tick_rows=v3_tick_rows,
+        is_v4=is_v4,
+        v4_sessions=v4_sessions,
+        v4_summary=v4_summary,
+        v4_config=v4_config,
         weekly_budget=float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
         daily_budget=float(os.environ.get("DAILY_BUDGET_USD", "50")),
         experiment_hypothesis=experiment_hypothesis,

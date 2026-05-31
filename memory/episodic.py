@@ -168,6 +168,30 @@ CREATE TABLE IF NOT EXISTS v3_sessions (
     distress_alerts         INTEGER DEFAULT 0,
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
+
+-- v4 only ('continuous'): per-session record. The session ends ONLY via the
+-- system wind-down (wall clock); the agent has NO end or schedule control. The
+-- in-process adaptive cadence drives the turn loop; a neutral clock is the only
+-- between-turn signal. We record awake duration, active vs idle turn split,
+-- inbound chat count, and distress alerts (notify-only, never auto-pause).
+CREATE TABLE IF NOT EXISTS v4_sessions (
+    session_id              INTEGER PRIMARY KEY,
+    started_at              TEXT,
+    ended_at                TEXT,
+    awake_seconds_target    REAL,    -- planned awake length (s)
+    actual_awake_seconds    REAL,
+    scheduled_sleep_minutes REAL,
+    num_turns               INTEGER DEFAULT 0,
+    active_turns            INTEGER DEFAULT 0,
+    idle_turns              INTEGER DEFAULT 0,
+    inbound_messages        INTEGER DEFAULT 0,
+    end_reason              TEXT,
+    total_cost_usd          REAL DEFAULT 0.0,
+    decayed_count           INTEGER DEFAULT 0,
+    consolidated_count      INTEGER DEFAULT 0,
+    distress_alerts         INTEGER DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 """
 
 _EPISODE_ALTERS = [
@@ -818,6 +842,68 @@ class EpisodicStore:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM v3_sessions ORDER BY session_id DESC LIMIT ?", (n,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------- v4: continuous session record ----------
+
+    def log_v4_session(
+        self,
+        *,
+        session_id: int,
+        started_at: str,
+        ended_at: str,
+        awake_seconds_target: float,
+        actual_awake_seconds: float,
+        scheduled_sleep_minutes: float,
+        num_turns: int,
+        active_turns: int,
+        idle_turns: int,
+        inbound_messages: int,
+        end_reason: str | None,
+        total_cost_usd: float,
+        decayed_count: int,
+        consolidated_count: int,
+        distress_alerts: int,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO v4_sessions(
+                    session_id, started_at, ended_at, awake_seconds_target,
+                    actual_awake_seconds, scheduled_sleep_minutes, num_turns,
+                    active_turns, idle_turns, inbound_messages, end_reason,
+                    total_cost_usd, decayed_count, consolidated_count,
+                    distress_alerts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    ended_at = excluded.ended_at,
+                    awake_seconds_target = excluded.awake_seconds_target,
+                    actual_awake_seconds = excluded.actual_awake_seconds,
+                    scheduled_sleep_minutes = excluded.scheduled_sleep_minutes,
+                    num_turns = excluded.num_turns,
+                    active_turns = excluded.active_turns,
+                    idle_turns = excluded.idle_turns,
+                    inbound_messages = excluded.inbound_messages,
+                    end_reason = excluded.end_reason,
+                    total_cost_usd = excluded.total_cost_usd,
+                    decayed_count = excluded.decayed_count,
+                    consolidated_count = excluded.consolidated_count,
+                    distress_alerts = excluded.distress_alerts
+                """,
+                (
+                    session_id, started_at, ended_at, awake_seconds_target,
+                    actual_awake_seconds, scheduled_sleep_minutes, num_turns,
+                    active_turns, idle_turns, inbound_messages, end_reason,
+                    total_cost_usd, decayed_count, consolidated_count,
+                    distress_alerts,
+                ),
+            )
+
+    def recent_v4_sessions(self, n: int = 20) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v4_sessions ORDER BY session_id DESC LIMIT ?", (n,)
             ).fetchall()
         return [dict(r) for r in rows]
 

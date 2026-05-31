@@ -839,6 +839,9 @@ def main() -> int:
     if instance.version == "v3":
         from v3_session import run_v3_session
         return run_v3_session(instance)
+    if instance.version == "v4":
+        from v4_session import run_v4_session
+        return run_v4_session(instance)
     log.error("Instance %s has unknown version %r; aborting", instance.id, instance.version)
     return 1
 
