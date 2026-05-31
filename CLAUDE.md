@@ -97,6 +97,11 @@ points an external agent at it.
 - **`scripts/start_dashboard.sh` runs `pkill -f "dashboard/app.py"`.** If your own shell
   command contains that literal substring, the pkill will kill *your* shell mid-run.
   Avoid writing `dashboard/app.py` in the same command that restarts the dashboard.
+- **Dashboard template edits hot-reload; Python edits do not.** The app sets
+  `TEMPLATES_AUTO_RELOAD = True`, so editing `dashboard/templates/*.html` takes effect on
+  the next request (just refresh the browser) — no restart. Editing `dashboard/app.py` (or
+  any `.py`) still requires `./scripts/start_dashboard.sh`, since `debug=False` (no `.py`
+  watcher). A stale-looking dashboard after a *Python* change usually means it wasn't restarted.
 - **The dashboard's instance switcher is a GET `<form>`** (works with or without JS).
   JavaScript *does* run in the operator's browser (verified) — an earlier "dropdown did
   nothing" was a bug in that specific handler / a stale page, not disabled JS. Prefer

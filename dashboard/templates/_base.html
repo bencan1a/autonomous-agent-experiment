@@ -88,7 +88,7 @@
   .toprow {
     grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: 3fr 1fr;
     gap: 16px;
   }
   .toprow > section { margin: 0; }
@@ -172,6 +172,11 @@
   }
   .stat .label { font-size: 10px; text-transform: uppercase; color: var(--muted); }
   .stat .value { font-size: 18px; font-weight: 600; color: var(--text); }
+  /* Vertically-stacked, compact variant (e.g. API spend in the narrow column). */
+  .stat-grid.stack { grid-template-columns: 1fr; gap: 6px; }
+  .stat-grid.stack .stat { padding: 5px 8px; }
+  .stat-grid.stack .stat .value { font-size: 14px; }
+  .stat-grid.stack .stat .bar { margin-top: 4px; height: 4px; }
   .bar {
     height: 6px;
     background: var(--border);
@@ -281,6 +286,20 @@
     background-position: right 7px center;
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
+  /* Compact rounded button that sits inline beside status pills.
+     Sized to match .pill exactly, but filled so it reads as a button. */
+  button.pill-btn {
+    border-radius: 10px;
+    padding: 1px 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    vertical-align: baseline;
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    font-weight: 600;
+  }
+  button.pill-btn:hover { background: #79b8ff; border-color: #79b8ff; color: var(--bg); }
   input[type="password"] {
     cursor: text;
     color: var(--muted);

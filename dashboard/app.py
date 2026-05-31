@@ -325,6 +325,16 @@ def _status() -> dict:
             }
     entries = cron_control.current_instance_entries(g.instance.id)
     if not entries:
+        # Distinguish an operator pause (cron deliberately removed by the Pause
+        # control) from a genuine self-quiescence / never-run state.
+        control = instance_control.read_control(g.instance.id)
+        if control.get("paused"):
+            paused_at = control.get("paused_at")
+            since = f" since {paused_at}" if paused_at else ""
+            return {
+                "state": "stopped",
+                "detail": f"paused by operator{since} — no wake will be scheduled until resumed",
+            }
         return {
             "state": "stopped",
             "detail": "no cron entry — agent has chosen not to reschedule (or has never run)",
