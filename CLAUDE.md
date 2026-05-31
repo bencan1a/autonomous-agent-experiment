@@ -102,10 +102,11 @@ points an external agent at it.
   the next request (just refresh the browser) — no restart. Editing `dashboard/app.py` (or
   any `.py`) still requires `./scripts/start_dashboard.sh`, since `debug=False` (no `.py`
   watcher). A stale-looking dashboard after a *Python* change usually means it wasn't restarted.
-- **The dashboard's instance switcher is a GET `<form>`** (works with or without JS).
-  JavaScript *does* run in the operator's browser (verified) — an earlier "dropdown did
-  nothing" was a bug in that specific handler / a stale page, not disabled JS. Prefer
-  native `<details>`/CSS for collapse where it suffices, but JS-based UI is fine.
+- **The dashboard's instance switcher is a GET `<form>`** that auto-submits on change
+  (works with or without JS). JavaScript *does* run in the operator's browser (verified) —
+  an earlier "dropdown did nothing" was a bug in that specific handler / a stale page, not
+  disabled JS. Prefer native `<details>`/CSS for collapse where it suffices, but JS-based
+  UI is fine.
 - **v2 `min_wake_hours` is LOGGED, not enforced — by deliberate (ethical) design.**
   `end_session` must be honored immediately; the gap vs the reference is recorded in
   `v2_sessions` (`ended_early`). Do not add enforcement / a "you can't leave yet" branch.
