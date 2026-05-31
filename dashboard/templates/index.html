@@ -467,13 +467,16 @@
             {% if e.detail and e.detail.verbs %}
             <div class="small" style="margin-top:2px;"><span class="ts">did:</span> {{ e.detail.verbs }}</div>
             {% endif %}
-            {% if e.detail and (e.detail.internal_state or e.detail.journal or e.detail.tools or e.detail.body) %}
+            {% if e.detail and e.detail.internal_state %}
+            <div class="small clamp10" style="margin-top:4px;" title="{{ e.detail.internal_state }}"><span class="ts">felt:</span> {{ e.detail.internal_state }}</div>
+            {% endif %}
+            {% if e.detail and e.detail.journal %}
+            <div class="small clamp10" style="margin-top:4px;" title="{{ e.detail.journal }}"><span class="ts">journal:</span> {{ e.detail.journal }}</div>
+            {% endif %}
+            {% if e.detail and e.detail.tools %}
             <details style="margin-top:4px;">
-              <summary class="small">details</summary>
-              {% if e.detail.internal_state %}<div class="small"><span class="ts">felt:</span> {{ e.detail.internal_state }}</div>{% endif %}
-              {% if e.detail.journal %}<div class="small"><span class="ts">journal:</span> {{ e.detail.journal }}</div>{% endif %}
-              {% if e.detail.tools %}<div class="small"><span class="ts">tools:</span> {{ e.detail.tools|join(' · ') }}</div>{% endif %}
-              {% if e.detail.body %}<div class="small"><span class="ts">body:</span> {{ e.detail.body }}</div>{% endif %}
+              <summary class="small">tools</summary>
+              <div class="small"><span class="ts">tools:</span> {{ e.detail.tools|join(' · ') }}</div>
             </details>
             {% endif %}
           </td>
