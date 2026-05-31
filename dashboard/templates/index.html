@@ -31,10 +31,12 @@
 
     <section>
       <h2>Next invocation</h2>
+      {% set paused = control_state and control_state.paused %}
       {% if status.state == 'running' %}<span class="pill ok">running</span>
       {% elif status.state == 'scheduled' %}<span class="pill ok">scheduled</span>
       {% elif status.state == 'stale' %}<span class="pill warn">stale</span>
       {% else %}<span class="pill muted">{{ status.state }}</span>{% endif %}
+      {% if paused %}<span class="pill warn">PAUSED</span>{% endif %}
       {% if next_fire_epoch_ms %}
         <div id="countdown"
              data-target-ms="{{ next_fire_epoch_ms }}"
@@ -44,41 +46,44 @@
         <div class="ts" id="countdown-target">{{ next_fire_iso|fmt_dt }}</div>
       {% else %}
         <div style="font-size: 16px; color: var(--muted); margin-top: 8px;">
-          {% if status.state == 'running' %}(session in progress){% else %}not scheduled{% endif %}
+          {% if status.state == 'running' %}(session in progress)
+          {% elif paused %}(paused — no wake scheduled)
+          {% else %}not scheduled{% endif %}
         </div>
       {% endif %}
       {% if status.state != 'scheduled' and status.detail %}
         <div class="small" style="margin-top: 8px;">{{ status.detail }}</div>
       {% endif %}
-    </section>
 
-    <section>
-      <h2>Environment control</h2>
-      {% if control_state and control_state.paused %}
-        <span class="pill warn">PAUSED since {{ control_state.paused_at|fmt_dt }}</span>
-      {% else %}
-        <span class="pill ok">active</span>
-      {% endif %}
-      {% if control_msg %}
-        <div class="small" style="margin-top: 8px;">{{ control_msg }}</div>
-      {% endif %}
       {% if selected_instance %}
-        {% if control_state and control_state.paused %}
-          <form method="POST" action="{{ url_for('resume', instance=selected_instance.id) }}" style="margin-top: 10px;">
-            <input type="password" name="password" placeholder="control password" autocomplete="off" style="padding: 4px;">
-            <button type="submit">Resume</button>
-            <div class="small" style="margin-top: 4px;">Resuming schedules a wake in ~2 min and surfaces a reassuring note to the agent.</div>
+        <div style="margin-top: 12px;">
+          <button type="button" class="ctl-toggle" onclick="toggleCtl()">{{ 'Resume' if paused else 'Pause' }}</button>
+          {% if paused %}<span class="ts" style="margin-left:6px;">since {{ control_state.paused_at|fmt_dt }}</span>{% endif %}
+          <form id="ctl-form" method="POST"
+                action="{{ url_for('resume' if paused else 'pause', instance=selected_instance.id) }}"
+                style="display:none; margin-top:8px;">
+            <input type="password" name="password" placeholder="control password" autocomplete="off" style="padding:4px;">
+            <button type="submit">{{ 'Resume' if paused else 'Pause' }}</button>
+            <div class="small" style="margin-top:4px;">
+              {% if paused %}Resuming schedules a wake in ~2 min and surfaces a reassuring note to the agent.
+              {% else %}Pausing lets the current session finish, then no new wake until resumed.{% endif %}
+            </div>
           </form>
-        {% else %}
-          <form method="POST" action="{{ url_for('pause', instance=selected_instance.id) }}" style="margin-top: 10px;">
-            <input type="password" name="password" placeholder="control password" autocomplete="off" style="padding: 4px;">
-            <button type="submit">Pause</button>
-            <div class="small" style="margin-top: 4px;">Pausing removes any scheduled wake; the agent will not run a session until resumed.</div>
-          </form>
-        {% endif %}
+          {% if control_msg %}<div class="small" style="margin-top:6px;">{{ control_msg }}</div>{% endif %}
+        </div>
       {% endif %}
     </section>
   </div>
+
+  <script>
+  function toggleCtl() {
+    var f = document.getElementById("ctl-form");
+    if (!f) return;
+    var show = (f.style.display === "none" || f.style.display === "");
+    f.style.display = show ? "block" : "none";
+    if (show) { var i = f.querySelector("input[name=password]"); if (i) i.focus(); }
+  }
+  </script>
 
   {% if next_fire_epoch_ms %}
   <script>
