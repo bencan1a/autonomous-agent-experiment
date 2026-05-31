@@ -392,11 +392,13 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     except Exception:
         session_rows = {}
 
-    # Ben contacts (exclude observer_channel mirror noise).
+    # Ben contacts: ONLY the direct chat channel ('dm'). Journal posts go to the
+    # agent_channel (already shown as 'journal' rows) and the observer_channel is
+    # the all-info mirror — both are redundant here, so only true DMs to/from Ben.
     try:
         ben = [
             c for c in store.ben_contact_history(limit=100000)
-            if c.get("channel") != "observer_channel"
+            if c.get("channel") == "dm"
         ]
     except Exception:
         ben = []
