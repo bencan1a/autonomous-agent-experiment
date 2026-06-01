@@ -146,12 +146,24 @@ CHAIR_JSON = json.dumps({
 })
 
 
+def _force_anthropic(cfg):
+    """Pin the panel to Anthropic-only so the offline FakeClient handles every call
+    (default config is now cross-vendor via OpenRouter)."""
+    r = cfg.get("research", {})
+    for grp in ("seats", "synthesizer_lenses", "proposal_lenses"):
+        for item in r.get(grp, []) or []:
+            item["provider"] = "anthropic"
+            item["model"] = "claude-sonnet-4-6"
+    return cfg
+
+
 def _make_env(tmp: Path, *, eid="exp", research_overrides=None, write_spec=True, stmt="agent self-originates"):
     agent_root = tmp
     (agent_root / "experiments").mkdir(exist_ok=True)
     if write_spec:
         (agent_root / "experiments" / f"{eid}.md").write_text(VALID_SPEC.format(eid=eid, stmt=stmt))
     cfg = instances_common.default_config(eid, "v4")
+    _force_anthropic(cfg)
     cfg["name"] = eid
     if research_overrides:
         cfg["research"].update(research_overrides)
@@ -295,6 +307,7 @@ def scenario_6_panel_never_blocks_runner():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         inst = _build_instance(tmp, {})  # v2 instance "testinst"; agent_root = root.parent.parent = tmp
+        _force_anthropic(inst.config)    # keep the in-runner panel offline (default is cross-vendor)
         (tmp / "experiments").mkdir(exist_ok=True)
         (tmp / "experiments" / "testinst.md").write_text(
             VALID_SPEC.format(eid="testinst", stmt="agent self-originates"))

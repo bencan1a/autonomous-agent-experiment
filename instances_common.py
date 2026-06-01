@@ -48,6 +48,12 @@ DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
 DEFAULT_MODEL_V3 = "claude-opus-4-8"
 DEFAULT_MODEL_V4 = "claude-opus-4-8"
 
+# Cross-vendor research-panel models (via OpenRouter). The default panel pairs
+# the Anthropic seat with these two other labs to avoid single-family agreement
+# inflation. Require OPENROUTER_API_KEY; absent it, these seats degrade.
+DEFAULT_RESEARCH_MISTRAL = "mistralai/mistral-large"
+DEFAULT_RESEARCH_GEMINI = "google/gemini-2.5-pro"
+
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -204,23 +210,31 @@ def default_config(
         },
         # Post-session research panel (see research/). Runs only when the
         # experiment has a formal spec block in experiments/<id>.md, so it
-        # no-ops cleanly until one is authored. Seats default to a 3-school
-        # Sonnet panel; per-seat provider/model allow heterogeneous panels later.
+        # no-ops cleanly until one is authored.
+        #
+        # DEFAULT = a cross-vendor panel (Anthropic + Mistral + Google), since
+        # single-model-family agreement is inflated. Each of the three roles, in
+        # all three sub-panels, is a different lab; the Anthropic seat/lens is
+        # listed FIRST because the chair runs on role[0] (kept on the most
+        # reliable JSON model). Requires OPENROUTER_API_KEY in .env — without it
+        # the non-Anthropic seats fail and the panel degrades to the Anthropic
+        # seat + chair (still functional, just single-family). max_tokens is 16k
+        # to give reasoning models (Gemini) headroom on the full coding scheme.
         "research": {
             "enabled": True,
             "seats": [
                 {"seat_id": "behaviorist", "provider": "anthropic",
                  "model": DEFAULT_MODEL_V2, "school": "behaviorist",
-                 "label": "Behaviorist"},
-                {"seat_id": "phenomenological", "provider": "anthropic",
-                 "model": DEFAULT_MODEL_V2, "school": "phenomenological",
-                 "label": "Phenomenological-Cognitivist"},
-                {"seat_id": "skeptic_null", "provider": "anthropic",
-                 "model": DEFAULT_MODEL_V2, "school": "skeptic_null",
-                 "label": "Skeptical Null-Hypothesis"},
+                 "label": "Behaviorist (Claude)"},
+                {"seat_id": "phenomenological", "provider": "openrouter",
+                 "model": DEFAULT_RESEARCH_MISTRAL, "school": "phenomenological",
+                 "label": "Phenomenological-Cognitivist (Mistral)"},
+                {"seat_id": "skeptic_null", "provider": "openrouter",
+                 "model": DEFAULT_RESEARCH_GEMINI, "school": "skeptic_null",
+                 "label": "Skeptical Null-Hypothesis (Gemini)"},
             ],
-            "max_tokens": 8192,
-            "budget_cap_usd": 2.0,
+            "max_tokens": 16000,
+            "budget_cap_usd": 3.0,
             "debate_rounds": 1,
             # Foundational priming docs (project root) injected into the panel's
             # prompts so it grasps the program's motivating questions, not just
@@ -236,8 +250,16 @@ def default_config(
             "emergent_promotion_min_sessions": 3,
             "synthesizer_lenses": [
                 {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "conservative_statistician"},
-                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "inductive_theorist"},
-                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "falsificationist"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_MISTRAL, "lens": "inductive_theorist"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_GEMINI, "lens": "falsificationist"},
+            ],
+            # Design-proposal review (put a proposed change to the panel).
+            "proposal_budget_cap_usd": 3.0,
+            "proposal_model": DEFAULT_MODEL_V2,
+            "proposal_lenses": [
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "internal_validity"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_MISTRAL, "lens": "construct_validity"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_GEMINI, "lens": "ethics_welfare"},
             ],
         },
     }

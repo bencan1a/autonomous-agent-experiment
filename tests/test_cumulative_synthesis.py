@@ -117,6 +117,12 @@ def _seed_env(tmp: Path, n_notes=2, approve=True):
     (agent_root / "experiments" / "exp.md").write_text(SPEC_MD)
     cfg = instances_common.default_config("exp", "v4")
     cfg["name"] = "exp"
+    # Default config is now cross-vendor (OpenRouter); pin to Anthropic so the
+    # offline FakeClient handles every lens/seat/chair call.
+    for grp in ("seats", "synthesizer_lenses", "proposal_lenses"):
+        for item in cfg["research"].get(grp, []) or []:
+            item["provider"] = "anthropic"
+            item["model"] = "claude-sonnet-4-6"
     inst = instances_common.Instance(id="exp", root=agent_root / "instances" / "exp", config=cfg)
     inst.ensure_dirs()
     ep = EpisodicStore(inst.episodes_db)
