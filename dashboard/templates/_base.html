@@ -150,13 +150,28 @@
   }
   details[open] > summary { margin-bottom: 6px; }
   .focus { color: var(--accent); }
-  /* Clamp long narrative text to ~10 lines; full text shown via title= on hover. */
+  /* Clamp long narrative text to ~10 lines. Full text is reached via title=
+     on hover (desktop) and a JS-added "tap to expand" toggle on mobile. */
   .clamp10 {
     display: -webkit-box;
     -webkit-line-clamp: 10;
     line-clamp: 10;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+  .clamp10.expanded {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+  }
+  .clamp-toggle {
+    display: none;            /* revealed only when clamped (JS) + on mobile (CSS below) */
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 11px;
+    margin-top: 3px;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .stat-grid {
@@ -446,6 +461,9 @@
     table.timeline td.tl-min::after { content: "m"; }
     table.timeline td.tl-type { margin-left: auto; }   /* badge to the right */
     table.timeline td.tl-event { flex-basis: 100%; margin-top: 4px; }
+
+    /* Tap-to-expand affordance for clamped narrative (touch has no hover). */
+    .clamp-toggle.show { display: inline-block; }
   }
 </style>
 </head>
@@ -531,6 +549,32 @@
         if (heads[i]) td.setAttribute("data-label", heads[i]);
       });
     });
+  });
+})();
+</script>
+<script>
+/* Tap-to-expand for clamped narrative cells. A toggle is inserted after each
+   .clamp10 block and shown (via the .show class) only when the text is
+   actually truncated; CSS reveals it only on mobile, where there is no hover
+   tooltip. Desktop keeps the title= tooltip and the toggle stays hidden. */
+(function () {
+  document.querySelectorAll(".clamp10").forEach(function (el) {
+    var btn = document.createElement("div");
+    btn.className = "clamp-toggle";
+    btn.textContent = "tap to expand";
+    el.insertAdjacentElement("afterend", btn);
+    function refresh() {
+      if (el.classList.contains("expanded")) return;
+      var truncated = el.scrollHeight > el.clientHeight + 2;
+      btn.classList.toggle("show", truncated);
+    }
+    btn.addEventListener("click", function () {
+      var open = el.classList.toggle("expanded");
+      btn.textContent = open ? "tap to collapse" : "tap to expand";
+      if (!open) refresh();
+    });
+    refresh();
+    window.addEventListener("resize", refresh);
   });
 })();
 </script>
