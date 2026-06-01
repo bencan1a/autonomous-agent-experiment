@@ -409,10 +409,18 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     # Ben contacts: ONLY the direct chat channel ('dm'). Journal posts go to the
     # agent_channel (already shown as 'journal' rows) and the observer_channel is
     # the all-info mirror — both are redundant here, so only true DMs to/from Ben.
+    # Capability requests also DM Ben on 'dm', but they already get their own
+    # 'capability' row below; drop those outbound DMs to avoid a duplicate row
+    # (same de-duplication intent as the journal/agent_channel filter).
+    def _is_capability_dm(c) -> bool:
+        return (
+            c.get("direction") == "out"
+            and (c.get("body") or "").lstrip().startswith(":key: *Capability request")
+        )
     try:
         ben = [
             c for c in store.ben_contact_history(limit=100000)
-            if c.get("channel") == "dm"
+            if c.get("channel") == "dm" and not _is_capability_dm(c)
         ]
     except Exception:
         ben = []

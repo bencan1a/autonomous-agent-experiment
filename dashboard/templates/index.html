@@ -534,7 +534,7 @@
             {% else %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>{% endif %}
           </td>
           <td class="tl-event focus">
-            <div class="clamp10" title="{{ e.summary }}">{{ e.summary }}</div>
+            <div class="clamp10">{{ e.summary }}</div>
             {% if e.detail and e.detail.verbs %}
             <div class="small" style="margin-top:2px;"><span class="ts">did:</span> {{ e.detail.verbs }}</div>
             {% endif %}

@@ -165,13 +165,24 @@
     overflow: visible;
   }
   .clamp-toggle {
-    display: none;            /* revealed only when clamped (JS) + on mobile (CSS below) */
+    display: none;            /* revealed only when the text is actually clamped (JS) */
     color: var(--accent);
     cursor: pointer;
     font-size: 11px;
     margin-top: 3px;
     user-select: none;
     -webkit-user-select: none;
+  }
+  .clamp-toggle.show { display: inline-block; }   /* shown on all viewports when clamped */
+  /* Desktop (hover-capable): hovering a row expands its clamped text inline,
+     replacing the old title= tooltip. Touch falls back to the tap toggle. */
+  @media (hover: hover) {
+    tr:hover .clamp10,
+    .clamp10:hover {
+      -webkit-line-clamp: unset;
+      line-clamp: unset;
+      overflow: visible;
+    }
   }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .stat-grid {
@@ -461,9 +472,6 @@
     table.timeline td.tl-min::after { content: "m"; }
     table.timeline td.tl-type { margin-left: auto; }   /* badge to the right */
     table.timeline td.tl-event { flex-basis: 100%; margin-top: 4px; }
-
-    /* Tap-to-expand affordance for clamped narrative (touch has no hover). */
-    .clamp-toggle.show { display: inline-block; }
   }
 </style>
 </head>
