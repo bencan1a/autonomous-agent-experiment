@@ -22,12 +22,13 @@ from slack_sdk.errors import SlackApiError
 logger = logging.getLogger(__name__)
 
 # Channel suffixes in a fixed order.
-_SUFFIXES = ("notes", "mirror", "chat")
+_SUFFIXES = ("notes", "mirror", "chat", "advisory")
 
 _PURPOSES = {
     "notes": "Agent's journal — entries the agent chooses to post.",
     "mirror": "Silent mirror of every episode/tick for observers.",
     "chat": "Two-way conversation between the agent and Ben.",
+    "advisory": "Operator-only: research-assistant advice on how to respond when the agent reaches out.",
 }
 
 
@@ -65,6 +66,7 @@ def provision_instance_channels(
         "notes_channel": None,
         "mirror_channel": None,
         "chat_channel": None,
+        "advisory_channel": None,
     }
 
     for suffix in _SUFFIXES:

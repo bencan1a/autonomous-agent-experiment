@@ -29,12 +29,14 @@ class SlackClient:
         notes_channel: str | None = None,
         mirror_channel: str | None = None,
         chat_channel: str | None = None,
+        advisory_channel: str | None = None,
     ):
         self._client = WebClient(token=bot_token)
         # Keep the legacy attr names so method bodies barely change.
         self.agent_channel = notes_channel
         self.observer_channel = mirror_channel
         self.chat_channel = chat_channel
+        self.advisory_channel = advisory_channel
         self.ben_user_id = ben_user_id
 
     # ---------- auth / wiring sanity ----------
@@ -49,6 +51,10 @@ class SlackClient:
 
     def post_to_observer_channel(self, text: str) -> dict[str, Any] | None:
         return self._post(self.observer_channel, text)
+
+    def post_to_advisory_channel(self, text: str) -> dict[str, Any] | None:
+        """Operator-only response advisories. No-op if unprovisioned."""
+        return self._post(self.advisory_channel, text)
 
     def dm_ben(self, text: str) -> dict[str, Any] | None:
         """Post a message to the agent's two-way chat channel with Ben.
