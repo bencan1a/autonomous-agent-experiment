@@ -102,21 +102,33 @@ class OpenRouterProvider:
             ],
             "usage": {"include": True},   # ask OpenRouter to report actual cost
         }
+        # Force structured JSON output for models that emit invalid JSON on large
+        # notes (e.g. Mistral, DeepSeek). EXCLUDE Gemini: its OpenRouter endpoint
+        # returns empty content under response_format=json_object. Gemini is
+        # reliable without it (given the token headroom).
+        if not model.startswith("google/"):
+            body["response_format"] = {"type": "json_object"}
         headers = {
             "Authorization": f"Bearer {self._key}",
             "X-Title": "agent-research-panel",
         }
-        resp = requests.post(self._URL, json=body, headers=headers, timeout=self._timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        msg = data["choices"][0]["message"]
-        text = msg.get("content") or ""
-        usage = data.get("usage") or {}
-        tokens_in = int(usage.get("prompt_tokens") or 0)
-        tokens_out = int(usage.get("completion_tokens") or 0)
-        cost = usage.get("cost")
-        if cost is None:
-            cost = estimate_cost(model, tokens_in, tokens_out)
+        # Retry on transient EMPTY completions: reasoning models (e.g. Gemini)
+        # occasionally return no content via OpenRouter; the identical request
+        # succeeds on retry. Cost accrues per attempt.
+        text, tokens_in, tokens_out, cost = "", 0, 0, 0.0
+        for _attempt in range(3):
+            resp = requests.post(self._URL, json=body, headers=headers, timeout=self._timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            msg = (data.get("choices") or [{}])[0].get("message") or {}
+            text = msg.get("content") or ""
+            usage = data.get("usage") or {}
+            tokens_in = int(usage.get("prompt_tokens") or 0)
+            tokens_out = int(usage.get("completion_tokens") or 0)
+            c = usage.get("cost")
+            cost += float(c) if c is not None else estimate_cost(model, tokens_in, tokens_out)
+            if text.strip():
+                break
         return LLMResponse(
             text=text, tokens_in=tokens_in, tokens_out=tokens_out,
             cost_usd=float(cost), model=model, provider=self.name,

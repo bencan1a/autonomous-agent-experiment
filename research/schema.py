@@ -169,10 +169,14 @@ fit the token budget, so keep every field COMPACT:
   "analysis": "<2-4 sentences tying findings to the hypotheses by id (H1, H2, ...)>",
   "open_questions": ["<what you could not determine from the evidence>"]
 }
-Limits: at most 8 raw_observations and at most 6 inferences; cite at most 3 anchors per item.
-Do NOT repeat the code definitions — give the code NAME only. raw_observations contain NO
-interpretation. Every behavior_code is one of the provided codes with present true/false. Every
-inference lists the observation ids it derives from. Cite only real anchors from the evidence."""
+CRITICAL — behavior_codes MUST contain exactly ONE entry for EVERY code in the coding scheme
+above (all of them), each with "present": true or false. Do NOT omit any code; an omitted code
+is an error. For codes you mark absent, use "present": false and "cites": []. For codes that do
+not apply to this session, still include them with "present": false.
+Limits: at most 8 raw_observations and at most 6 inferences; cite at most 2 anchors per item and
+at most 2 per present code. Do NOT repeat the code definitions — give the code NAME only.
+raw_observations contain NO interpretation. Every inference lists the observation ids it derives
+from. Cite only real anchors from the evidence."""
 
 SYNTH_NOTE_FORMAT = """Respond with ONE JSON object and NOTHING else; keep every field COMPACT:
 {
