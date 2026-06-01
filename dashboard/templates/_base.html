@@ -312,6 +312,14 @@
   }
   input[type="password"]::placeholder { color: var(--muted); opacity: 0.7; }
 
+  /* Collapsible block. On desktop there is NO toggle UI and the body is
+     always shown (pixel-identical to before); the collapse only engages at
+     the mobile breakpoint below, where it tucks bulky card-stacked tables
+     behind a tap. */
+  .m-collapsible > details > summary { display: none; }
+  .m-collapsible > details > .m-body { display: block; }
+  .m-collapsible .m-hint { display: none; }
+
   /* ---------------- Mobile / narrow-viewport layout ----------------
      All rules live behind this breakpoint so the desktop layout above
      is untouched. Goal: read the content logs top-to-bottom with no
@@ -341,7 +349,6 @@
        focus-zoom. Applies to the instance switcher + Pause/Resume form. */
     header .instance-bar { width: 100%; }
     header .instance-bar select,
-    .ctl-toggle,
     #ctl-form button,
     #ctl-form input[type="password"] {
       width: 100%;
@@ -349,6 +356,20 @@
       font-size: 16px;
     }
     header .instance-bar select { font-size: 16px; }
+    /* The Pause/Resume toggle keeps its compact pill-btn styling — it is
+       a chip beside the status pills, not a full-width form control. */
+    .ctl-toggle { width: auto; }
+    /* The running-now server clock is desktop-only chrome; hide it on
+       mobile so the status pills stay on a single line. */
+    .meta-time { display: none; }
+    /* The status chips live in two sibling containers — the instance-bar
+       <form> (active · cost) and the .meta <div> (stopped · episodes).
+       Because the form is width:100% (full-width dropdown), .meta is
+       pushed to its own line. Flatten both boxes so all four chips share
+       one flex row; the full-width <select> still forces its own line
+       above them. */
+    header .instance-bar,
+    header .meta { display: contents; }
 
     /* Card-stack data tables: each row becomes a labelled card so the
        narrative reads in full width. The `stack` class + per-cell
@@ -385,6 +406,46 @@
     /* Readability: let clamped/scrolling regions breathe on mobile. */
     .truncate { max-width: 100%; }
     .scrollbox, .scrollbox.tall { max-height: none; }
+
+    /* Engage the collapse: the summary becomes a tappable toggle and the
+       body is hidden until the section is opened. */
+    .m-collapsible > details > summary {
+      display: list-item;
+      cursor: pointer;
+      padding: 6px 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .m-collapsible > details:not([open]) > .m-body { display: none; }
+    .m-collapsible .m-hint {
+      display: inline;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    /* Timeline: each row becomes a tile — a thin header bar (turn · minute
+       left, type badge pushed right) above the full-width event content. */
+    table.timeline thead { display: none; }
+    table.timeline, table.timeline tbody { display: block; }
+    table.timeline tr {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      background: var(--panel);
+    }
+    table.timeline td { display: block; border: none; padding: 0; font-size: 13px; }
+    table.timeline td.tl-turn { font-weight: 600; color: var(--accent); }
+    table.timeline td.tl-min { color: var(--muted); }
+    table.timeline td.tl-min::after { content: "m"; }
+    table.timeline td.tl-type { margin-left: auto; }   /* badge to the right */
+    table.timeline td.tl-event { flex-basis: 100%; margin-top: 4px; }
   }
 </style>
 </head>
@@ -443,7 +504,7 @@
       {% endif %}
     {% endif %}
     {% block header_meta %}{% endblock %}
-    &nbsp; {{ now }}
+    <span class="meta-time">&nbsp; {{ now }}</span>
   </div>
 </header>
 

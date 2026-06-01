@@ -388,6 +388,10 @@
     {% endif %}
 
     {% if v4_sessions %}
+      <div class="m-collapsible">
+      <details>
+        <summary>per-cycle detail <span class="m-hint">· {{ v4_sessions|length }} cycle{{ '' if v4_sessions|length == 1 else 's' }}</span></summary>
+        <div class="m-body">
       <div class="scrollbox">
       <table>
         <thead>
@@ -429,6 +433,9 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
+        </div>
+      </details>
       </div>
     {% else %}
       <div class="empty">No v4 cycles recorded yet.</div>
@@ -504,12 +511,11 @@
       <div class="empty">No timeline events yet.</div>
     {% else %}
     <div>
-    <table>
+    <table class="timeline no-stack">
       <thead>
         <tr>
-          <th style="width:170px">time</th>
-          <th style="width:50px">iter</th>
-          <th style="width:50px">turn</th>
+          <th style="width:54px">turn</th>
+          <th style="width:46px; text-align:right;">min</th>
           <th style="width:110px">type</th>
           <th>event</th>
         </tr>
@@ -517,10 +523,9 @@
       <tbody>
       {% for e in timeline_events %}
         <tr class="tl-band-{{ e.band }}">
-          <td>{{ e.ts|fmt_dt }}</td>
-          <td>#{{ e.invocation if e.invocation is not none else '—' }}</td>
-          <td>{{ e.turn if e.turn is not none else '—' }}</td>
-          <td>
+          <td class="tl-turn num nowrap" title="{{ e.ts|fmt_dt }}">{{ e.turn_label }}</td>
+          <td class="tl-min ts" style="text-align:right;">{{ e.minute if e.minute is not none else '—' }}</td>
+          <td class="tl-type">
             {% if e.type == 'work' %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>
             {% elif e.type == 'woke' %}<span class="pill ok">{{ e.icon }} {{ e.type }}</span>
             {% elif e.type == 'wind-down' %}<span class="pill warn">{{ e.icon }} {{ e.type }}</span>
@@ -528,7 +533,7 @@
             {% elif e.type in ('idle', 'sleep') %}<span class="pill muted">{{ e.icon }} {{ e.type }}</span>
             {% else %}<span class="pill dim">{{ e.icon }} {{ e.type }}</span>{% endif %}
           </td>
-          <td class="focus">
+          <td class="tl-event focus">
             <div class="clamp10" title="{{ e.summary }}">{{ e.summary }}</div>
             {% if e.detail and e.detail.verbs %}
             <div class="small" style="margin-top:2px;"><span class="ts">did:</span> {{ e.detail.verbs }}</div>

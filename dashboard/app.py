@@ -612,6 +612,27 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
             last_turn = e["turn"]
         e["band"] = last_turn % 2   # odd turn -> 1, even/none -> 0
 
+    # Compact-view fields: merged "<iter>.<turn>" label and minutes-since-wake.
+    # `starts` = earliest ts seen per invocation (its wake), so minute 0 == woke.
+    starts: dict = {}
+    for e in events:
+        inv = e.get("invocation")
+        t = _parse_iso(e.get("ts"))
+        if inv is None or t is None:
+            continue
+        if inv not in starts or t < starts[inv]:
+            starts[inv] = t
+    for e in events:
+        inv, turn = e.get("invocation"), e.get("turn")
+        if inv is None:
+            e["turn_label"] = "—"
+        elif turn is not None:
+            e["turn_label"] = f"{inv}.{turn}"
+        else:
+            e["turn_label"] = str(inv)
+        t, start = _parse_iso(e.get("ts")), starts.get(inv)
+        e["minute"] = max(0, int((t - start).total_seconds() // 60)) if (t and start) else None
+
     invocations = sorted(
         {e.get("invocation_num") for e in episodes if e.get("invocation_num") is not None},
         reverse=True,
