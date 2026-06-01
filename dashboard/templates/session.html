@@ -99,6 +99,129 @@
     </section>
   {% endif %}
 
+  {% if research_note or research_seats %}
+    <section class="wide">
+      <h2>Research panel
+        {% if research_note and research_note.coding_status == 'binding' %}
+          <span class="pill ok">binding</span>
+        {% else %}
+          <span class="pill muted" title="The coding scheme is not yet operator-approved.">provisional</span>
+        {% endif %}
+        {% if research_note and research_note.degraded %}<span class="pill bad">degraded</span>{% endif %}
+      </h2>
+
+      {% if research_kappa %}
+        <div class="ts" style="margin-bottom:8px;">
+          inter-rater agreement —
+          {% for k in research_kappa %}
+            {% if k.metric == 'fleiss' %}
+              <strong>Fleiss</strong> {{ '%.2f'|format(k.value) if k.value is not none else 'n/a' }}
+              <span class="small">(over {{ k.n_codes }} codes)</span>
+            {% endif %}
+          {% endfor %}
+          {% for k in research_kappa %}
+            {% if k.metric == 'cohen' %}
+              &nbsp;·&nbsp; {{ k.seat_a }}/{{ k.seat_b }}: {{ '%.2f'|format(k.value) if k.value is not none else 'n/a' }}
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if research_note and research_note.note %}
+        {% set n = research_note.note %}
+        {% if n.summary %}<p class="focus">{{ n.summary }}</p>{% endif %}
+
+        {% if n.promoted_claims %}
+          <h3>Promoted claims <span class="small">(≥2 seats, cited)</span></h3>
+          <ul>
+          {% for c in n.promoted_claims %}
+            <li>{{ c.claim }}
+              {% if c.hypothesis %}<span class="pill muted">{{ c.hypothesis }}</span>{% endif %}
+              {% if c.cites %}<span class="ts">cites: {{ c.cites|join(', ') }}</span>{% endif %}
+            </li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+
+        {% if n.disagreements %}
+          <h3>Disagreements</h3>
+          <ul>
+          {% for d in n.disagreements %}
+            <li>{{ d.topic }}{% if d.positions %}<div class="ts">{{ d.positions|join(' · ') }}</div>{% endif %}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+
+        {% if n.analysis %}<h3>Analysis</h3><p>{{ n.analysis }}</p>{% endif %}
+
+        {% if n.raw_observations %}
+          <details><summary>Raw observations ({{ n.raw_observations|length }})</summary>
+            <ul>{% for o in n.raw_observations %}
+              <li>{{ o.text }}{% if o.cites %} <span class="ts">[{{ o.cites|join(', ') }}]</span>{% endif %}</li>
+            {% endfor %}</ul>
+          </details>
+        {% endif %}
+        {% if n.inferences %}
+          <details><summary>Inferences ({{ n.inferences|length }})</summary>
+            <ul>{% for i in n.inferences %}
+              <li>{{ i.text }}
+                {% if i.from %}<span class="ts">from {{ i.from|join(', ') }}</span>{% endif %}
+                {% if i.confidence is not none %}<span class="small">conf {{ i.confidence }}</span>{% endif %}
+              </li>
+            {% endfor %}</ul>
+          </details>
+        {% endif %}
+        {% if n.open_questions %}
+          <details><summary>Open questions ({{ n.open_questions|length }})</summary>
+            <ul>{% for q in n.open_questions %}<li>{{ q }}</li>{% endfor %}</ul>
+          </details>
+        {% endif %}
+        <div class="ts" style="margin-top:6px;">
+          synthesized {{ research_note.created_at|relative_time }}
+          · research cost ${{ '%.4f'|format(research_note.total_cost_usd or 0) }}
+        </div>
+      {% endif %}
+
+      {% if research_seats %}
+        <h3 style="margin-top:12px;">Per-seat reviews <span class="small">({{ research_seats|length }})</span></h3>
+        {% for s in research_seats %}
+          <details>
+            <summary>
+              {{ s.school }}
+              {% if s.status == 'ok' %}<span class="pill ok">ok</span>
+              {% else %}<span class="pill bad">{{ s.status }}</span>{% endif %}
+              <span class="ts">{{ s.model }}</span>
+            </summary>
+            {% if s.note %}
+              {% if s.note.analysis %}<p>{{ s.note.analysis }}</p>{% endif %}
+              {% if s.note.behavior_codes %}
+                <table>
+                  <thead><tr><th>code</th><th style="width:70px">present</th><th>cites</th></tr></thead>
+                  <tbody>
+                  {% for bc in s.note.behavior_codes %}
+                    <tr>
+                      <td>{{ bc.code }}</td>
+                      <td>{% if bc.present %}<span class="pill ok">yes</span>{% else %}<span class="pill muted">no</span>{% endif %}</td>
+                      <td class="ts">{{ bc.cites|join(', ') if bc.cites else '—' }}</td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              {% endif %}
+              {% if s.note.raw_observations %}
+                <div class="ts" style="margin-top:6px;">observations:</div>
+                <ul>{% for o in s.note.raw_observations %}<li>{{ o.text }}{% if o.cites %} <span class="ts">[{{ o.cites|join(', ') }}]</span>{% endif %}</li>{% endfor %}</ul>
+              {% endif %}
+            {% elif s.parse_error %}
+              <div class="err">parse error: {{ s.parse_error }}</div>
+              {% if s.raw_output %}<details><summary>raw output</summary><pre>{{ s.raw_output }}</pre></details>{% endif %}
+            {% endif %}
+          </details>
+        {% endfor %}
+      {% endif %}
+    </section>
+  {% endif %}
+
   <section class="wide">
     <h2>Actions <span class="small">({{ actions|length }})</span></h2>
     {% if actions %}

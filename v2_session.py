@@ -782,6 +782,21 @@ def run_v2_session(instance: Instance) -> int:
                                  reason="post-session budget cap reached")
         return 0
 
+    # Post-session research panel (inline, never blocks the next wake).
+    try:
+        from research.panel import run_research_panel
+        from research.store import ResearchStore
+
+        run_research_panel(
+            instance=instance, episodic=episodic,
+            research_store=ResearchStore(instance.episodes_db),
+            anthropic_client=client,
+            session_id=session_id, invocation_num=invocation_num,
+            semantic=semantic, agent_root=instance.root.parent.parent,
+        )
+    except Exception:
+        log.exception("Research panel failed; continuing to schedule next wake")
+
     if next_invoke_minutes is None:
         log.info("Agent chose not to reschedule. No cron entry installed.")
         cron_control.clear_instance(instance.id)

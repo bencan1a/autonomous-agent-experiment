@@ -387,6 +387,119 @@ def cmd_slack_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_store_and_prereg(instance_id: str):
+    """Return (instance, ResearchStore, spec, prereg) or an error code.
+
+    The prereg returned is the one matching the *current* formal spec when a row
+    for it exists, otherwise the latest. Returns an int (error code) on failure.
+    """
+    registry = load_registry()
+    if registry_entry(registry, instance_id) is None:
+        return _err(f"no such instance: {instance_id}")
+    try:
+        inst = load_instance(instance_id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    from research.spec import load_spec
+    from research.store import ResearchStore
+
+    spec = load_spec(AGENT_ROOT, instance_id)
+    rs = ResearchStore(inst.episodes_db)
+    prereg = None
+    if spec is not None:
+        prereg = rs.get_prereg(instance_id, spec.spec_hash)
+    if prereg is None:
+        prereg = rs.latest_prereg(instance_id)
+    return inst, rs, spec, prereg
+
+
+def cmd_research_show(args: argparse.Namespace) -> int:
+    got = _research_store_and_prereg(args.id)
+    if isinstance(got, int):
+        return got
+    inst, rs, spec, prereg = got
+    if spec is None:
+        print(f"'{args.id}': no formal spec block in experiments/{args.id}.md "
+              "(panel will no-op until one is authored).")
+    else:
+        print(f"'{args.id}': formal spec v{spec.spec_version}, "
+              f"{len(spec.hypotheses)} hypotheses, spec_hash={spec.spec_hash[:12]}")
+    if prereg is None:
+        print("  no coding scheme operationalized yet (run a session).")
+        return 0
+    print(f"  coding scheme: status={prereg.get('status')} "
+          f"(spec_hash={str(prereg.get('spec_hash'))[:12]})")
+    for c in prereg.get("code_vocab") or []:
+        maps = f" [{c.get('maps_to_hypothesis')}]" if c.get("maps_to_hypothesis") else ""
+        print(f"    - {c.get('code')}{maps}: {c.get('definition')}")
+    return 0
+
+
+def cmd_research_approve(args: argparse.Namespace) -> int:
+    got = _research_store_and_prereg(args.id)
+    if isinstance(got, int):
+        return got
+    inst, rs, spec, prereg = got
+    if prereg is None:
+        return _err(
+            f"no coding scheme to approve for '{args.id}' yet — run a session so the "
+            "panel operationalizes the spec (and confirm experiments/"
+            f"{args.id}.md has a formal spec block)."
+        )
+    if prereg.get("status") == "approved":
+        print(f"'{args.id}': coding scheme already approved.")
+        return 0
+    print(f"Approving this coding scheme for '{args.id}':")
+    for c in prereg.get("code_vocab") or []:
+        print(f"    - {c.get('code')}: {c.get('definition')}")
+    if rs.approve_prereg(args.id, prereg.get("spec_hash")):
+        print("approved — new per-session research notes will be marked 'binding'.")
+        return 0
+    return _err("approval did not match any coding-scheme row.")
+
+
+def cmd_research_synthesize(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    if registry_entry(registry, args.id) is None:
+        return _err(f"no such instance: {args.id}")
+    try:
+        inst = load_instance(args.id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    # Shell may export ANTHROPIC_API_KEY=""; force it from .env (as the runners do).
+    try:
+        from dotenv import load_dotenv as _ld
+        _ld(AGENT_ROOT / ".env", override=True)
+    except Exception:
+        pass
+    import os as _os
+
+    import anthropic
+    from memory.episodic import EpisodicStore
+    from research.store import ResearchStore
+    from research.synthesis import run_cumulative_synthesis
+
+    client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
+    ep = EpisodicStore(inst.episodes_db)
+    rs = ResearchStore(inst.episodes_db)
+    semantic = None
+    if not args.no_embed:
+        from memory.semantic import SemanticStore
+        semantic = SemanticStore(inst.vectors_dir)
+    print(f"Refreshing cumulative synthesis for '{inst.id}' (real API spend)...")
+    res = run_cumulative_synthesis(
+        instance=inst, episodic=ep, research_store=rs,
+        anthropic_client=client, agent_root=AGENT_ROOT, semantic=semantic,
+    )
+    if not res:
+        print("  no report produced (no spec / no coding scheme / disabled).")
+        return 0
+    print(f"  {res.get('status')} · cost=${res.get('cost_usd', 0):.4f} "
+          f"drift_flagged={res.get('drift_flagged')}"
+          f"{' [degraded]' if res.get('degraded') else ''}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
@@ -454,6 +567,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--episodes", type=int, default=5, help="number of recent episodes to show"
     )
     p_show.set_defaults(func=cmd_show)
+
+    p_research = sub.add_parser(
+        "research", help="research panel: review/approve the operationalized coding scheme"
+    )
+    rsub = p_research.add_subparsers(dest="research_cmd", required=True)
+    p_r_show = rsub.add_parser("show", help="show the formal spec + coding scheme + status")
+    p_r_show.add_argument("id", help="instance id")
+    p_r_show.set_defaults(func=cmd_research_show)
+    p_r_approve = rsub.add_parser(
+        "approve", help="approve the coding scheme (makes per-session notes 'binding')"
+    )
+    p_r_approve.add_argument("id", help="instance id")
+    p_r_approve.set_defaults(func=cmd_research_approve)
+    p_r_syn = rsub.add_parser(
+        "synthesize", help="refresh the rolling cumulative report (real API spend)"
+    )
+    p_r_syn.add_argument("id", help="instance id")
+    p_r_syn.add_argument("--no-embed", action="store_true",
+                         help="skip embedding the report summary")
+    p_r_syn.set_defaults(func=cmd_research_synthesize)
 
     return parser
 

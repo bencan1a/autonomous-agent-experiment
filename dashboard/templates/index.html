@@ -552,4 +552,72 @@
     </div>
     {% endif %}
   </section>
+
+  {# ---------------- Research notes (panel review) — after the timeline, mirrors its selector ---------------- #}
+  {% if research_notes %}
+    {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
+    <section class="wide">
+      {% if research_show_all %}
+        <h2>Research notes <span class="small">(all invocations · {{ research_notes_count }})</span></h2>
+        {% for note in research_notes %}
+          {% set rn = note.note %}
+          <div class="card" style="margin-bottom:10px; padding:10px; border:1px solid var(--border, #333); border-radius:6px;">
+            <div>
+              <strong>Invocation #{{ note.invocation_num }}</strong>
+              {% if note.coding_status == 'binding' %}<span class="pill ok">binding</span>
+              {% else %}<span class="pill muted">provisional</span>{% endif %}
+              {% if note.degraded %}<span class="pill bad">degraded</span>{% endif %}
+              {% if note.fleiss is not none %}<span class="small">· Fleiss κ {{ '%.2f'|format(note.fleiss) }}</span>{% endif %}
+              <span class="ts">· {{ note.created_at|relative_time }}</span>
+            </div>
+            {% if rn and rn.summary %}<p class="focus" style="margin:6px 0;">{{ rn.summary }}</p>{% endif %}
+            {% if rn and rn.promoted_claims %}
+              <ul style="margin-top:2px;">
+              {% for c in rn.promoted_claims[:3] %}
+                <li>{{ c.claim }}{% if c.hypothesis %} <span class="pill muted">{{ c.hypothesis }}</span>{% endif %}</li>
+              {% endfor %}
+              </ul>
+            {% endif %}
+            <div class="small"><a href="{{ url_for('session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a></div>
+          </div>
+        {% endfor %}
+      {% else %}
+        {% set note = research_notes[0] %}
+        {% set rn = note.note %}
+        <h2>Research note
+          {% if research_invocation %}<span class="small">(invocation #{{ research_invocation }})</span>{% endif %}
+          {% if note.coding_status == 'binding' %}
+            <span class="pill ok">binding</span>
+          {% else %}
+            <span class="pill muted" title="The coding scheme is not yet operator-approved.">provisional</span>
+          {% endif %}
+          {% if note.degraded %}<span class="pill bad">degraded</span>{% endif %}
+          {% if note.fleiss is not none %}
+            <span class="small" title="Inter-rater agreement across the panel seats.">· Fleiss κ {{ '%.2f'|format(note.fleiss) }}</span>
+          {% endif %}
+        </h2>
+        {% if rn and rn.summary %}<p class="focus">{{ rn.summary }}</p>{% endif %}
+        {% if rn and rn.promoted_claims %}
+          <div class="small ts" style="margin-top:6px;">promoted claims (≥2 seats, cited):</div>
+          <ul style="margin-top:2px;">
+          {% for c in rn.promoted_claims[:5] %}
+            <li>{{ c.claim }}{% if c.hypothesis %} <span class="pill muted">{{ c.hypothesis }}</span>{% endif %}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+        {% if rn and rn.disagreements %}
+          <details style="margin-top:4px;">
+            <summary class="small">panel disagreements ({{ rn.disagreements|length }})</summary>
+            <ul>{% for d in rn.disagreements %}<li>{{ d.topic }}</li>{% endfor %}</ul>
+          </details>
+        {% endif %}
+        <div class="small" style="margin-top:8px;">
+          <a href="{{ url_for('session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a>
+          &nbsp;·&nbsp;
+          <a href="{{ url_for('research_view') }}{{ iq }}">all research ({{ research_notes_count }}) →</a>
+          <span class="ts">· synthesized {{ note.created_at|relative_time }}</span>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
 {% endblock %}

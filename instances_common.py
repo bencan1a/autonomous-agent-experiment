@@ -200,6 +200,45 @@ def default_config(
             "notes_channel": None,
             "mirror_channel": None,
             "chat_channel": None,
+            "advisory_channel": None,
+        },
+        # Post-session research panel (see research/). Runs only when the
+        # experiment has a formal spec block in experiments/<id>.md, so it
+        # no-ops cleanly until one is authored. Seats default to a 3-school
+        # Sonnet panel; per-seat provider/model allow heterogeneous panels later.
+        "research": {
+            "enabled": True,
+            "seats": [
+                {"seat_id": "behaviorist", "provider": "anthropic",
+                 "model": DEFAULT_MODEL_V2, "school": "behaviorist",
+                 "label": "Behaviorist"},
+                {"seat_id": "phenomenological", "provider": "anthropic",
+                 "model": DEFAULT_MODEL_V2, "school": "phenomenological",
+                 "label": "Phenomenological-Cognitivist"},
+                {"seat_id": "skeptic_null", "provider": "anthropic",
+                 "model": DEFAULT_MODEL_V2, "school": "skeptic_null",
+                 "label": "Skeptical Null-Hypothesis"},
+            ],
+            "max_tokens": 8192,
+            "budget_cap_usd": 2.0,
+            "debate_rounds": 1,
+            # Foundational priming docs (project root) injected into the panel's
+            # prompts so it grasps the program's motivating questions, not just
+            # the per-experiment spec. Loaded if present; falls back to this default.
+            "primers": ["primer_1_philosophy.md"],
+            # Rolling cumulative report (Phase 2): a living cross-session synthesis
+            # re-derived from the notes each time (anti-anchoring), via a panel of
+            # distinct lenses -> adversarial red-team -> chair, in plain language.
+            "cumulative_enabled": True,
+            "cumulative_budget_cap_usd": 3.0,
+            "cumulative_max_tokens": 8192,
+            "cumulative_min_notes": 2,
+            "emergent_promotion_min_sessions": 3,
+            "synthesizer_lenses": [
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "conservative_statistician"},
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "inductive_theorist"},
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "falsificationist"},
+            ],
         },
     }
     if version == "v2":

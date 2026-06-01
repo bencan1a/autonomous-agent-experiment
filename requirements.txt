@@ -19,3 +19,6 @@ slack_sdk>=3.27.0
 
 # Dashboard
 flask>=3.0.0
+
+# Research panel: formal experiment-spec parsing (experiments/<id>.md yaml block)
+pyyaml>=6.0

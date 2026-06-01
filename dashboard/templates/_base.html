@@ -481,6 +481,7 @@
   {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
   <nav>
     <a href="{{ url_for('index') }}{{ iq }}">overview</a>
+    <a href="{{ url_for('research_view') }}{{ iq }}">research</a>
     <a href="{{ url_for('logs') }}{{ iq }}">logs</a>
     <a href="{{ url_for('workspace_index') }}{{ iq }}">workspace</a>
     <a href="{{ url_for('actions_log') }}{{ iq }}">actions</a>
