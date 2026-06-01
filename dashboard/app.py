@@ -958,11 +958,26 @@ def _dashboard_context() -> dict:
     # Operator pause/resume control state + any confirmation message.
     control_state = instance_control.read_control(g.instance.id) if getattr(g, "instance", None) else dict(instance_control.DEFAULT_STATE)
     _control_arg = request.args.get("control")
-    control_msg = {
-        "paused": "Paused.",
-        "resumed": "Resumed — agent will wake in ~2 min.",
-        "badpass": "Wrong password.",
-    }.get(_control_arg)
+
+    # Next scheduled wake, parsed from the actual installed cron entry. Computed
+    # here (before the resume confirmation) so the message can quote the real
+    # time: install_instance_one_shot clamps short intervals up to
+    # MIN_INTERVAL_MINUTES, so resume does NOT necessarily wake in ~2 min.
+    next_fire = cron_control.next_fire_at(g.instance.id)
+    next_fire_iso = next_fire.isoformat() if next_fire else None
+    next_fire_epoch_ms = int(next_fire.timestamp() * 1000) if next_fire else None
+
+    if _control_arg == "resumed":
+        if next_fire is not None:
+            mins = max(1, round((next_fire - datetime.now()).total_seconds() / 60))
+            control_msg = f"Resumed — next wake {next_fire:%H:%M} UTC (~{mins} min)."
+        else:
+            control_msg = "Resumed — next wake scheduled."
+    else:
+        control_msg = {
+            "paused": "Paused.",
+            "badpass": "Wrong password.",
+        }.get(_control_arg)
 
     # Integrated invocation timeline (narrative view). Filter via ?tl=<int|all>.
     _tl_arg = request.args.get("tl")
@@ -973,12 +988,6 @@ def _dashboard_context() -> dict:
     else:
         _tl_parsed = None
     timeline = _build_invocation_timeline(store, invocation=_tl_parsed)
-
-    next_fire = cron_control.next_fire_at(g.instance.id)
-    # JS countdown is driven by epoch-ms in local time; we send both ISO
-    # (for display fallback) and epoch-ms.
-    next_fire_iso = next_fire.isoformat() if next_fire else None
-    next_fire_epoch_ms = int(next_fire.timestamp() * 1000) if next_fire else None
 
     return {
         "recent_files": recent_files,
