@@ -579,6 +579,42 @@ class ResearchStore:
                 rid = row[0] if row else 0
         return int(rid)
 
+    # ---------- design-proposal reviews ----------
+
+    def add_proposal(
+        self, *, experiment_id: str, session_id: int | None, proposal: Any,
+        raw_output: str | None = None, status: str = "open",
+    ) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO research_proposals(
+                    experiment_id, created_at, session_id, proposal_json, status, raw_output
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (experiment_id, _utcnow_iso(), session_id,
+                 json.dumps(proposal) if proposal is not None else None, status, raw_output),
+            )
+            return int(cur.lastrowid)
+
+    def recent_proposals(self, experiment_id: str | None = None, n: int = 50) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            if experiment_id:
+                rows = conn.execute(
+                    "SELECT * FROM research_proposals WHERE experiment_id = ? ORDER BY id DESC LIMIT ?",
+                    (experiment_id, n),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM research_proposals ORDER BY id DESC LIMIT ?", (n,)
+                ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["proposal"] = _loads(d.get("proposal_json"))
+            out.append(d)
+        return out
+
     def recent_advisories(self, n: int = 50) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
