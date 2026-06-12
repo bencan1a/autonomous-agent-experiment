@@ -42,9 +42,8 @@ from communications.slack_client import SlackClient, format_episode_for_observer
 from instances_common import (
     Instance,
     SHARED_HF_CACHE,
-    load_registry,
     now_iso,
-    save_registry,
+    registry_txn,
 )
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
@@ -572,11 +571,10 @@ def run_v2_session(instance: Instance) -> int:
 
     # registry last_wake
     try:
-        reg = load_registry()
-        ent = reg.get("instances", {}).get(instance.id)
-        if ent is not None:
-            ent["last_wake"] = now_iso()
-            save_registry(reg)
+        with registry_txn() as reg:
+            ent = reg.get("instances", {}).get(instance.id)
+            if ent is not None:
+                ent["last_wake"] = now_iso()
     except Exception:
         log.exception("Failed to update registry last_wake; continuing")
 

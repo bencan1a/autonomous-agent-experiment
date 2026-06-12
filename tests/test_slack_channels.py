@@ -7,7 +7,7 @@ canned responses. Covers:
     the correct channel ids (notes/mirror/chat); dm_ben targets CHAT; fetch
     reads the chat channel and returns only Ben's messages; None channels no-op.
   - provisioning: name_taken on one channel is resolved via conversations_list;
-    Ben is invited; returns all three ids.
+    Ben is invited; returns all four ids (notes/mirror/chat/advisory).
   - archive: conversations_archive called per id; already_archived ignored.
 
 Run:
@@ -215,19 +215,23 @@ def scenario_provision_name_taken_reuse():
 
     assert result["notes_channel"], result
     assert result["chat_channel"], result
+    assert result["advisory_channel"], result
     # The name_taken channel resolved via conversations_list to the existing id.
     assert result["mirror_channel"] == "CEXIST", result
     assert fake.list_calls >= 1, "conversations_list not used for name_taken"
-    # Ben invited to all three.
+    # Ben invited to all four.
     invited_channels = {ch for ch, _ in fake.invites}
     assert invited_channels == {
-        result["notes_channel"], result["mirror_channel"], result["chat_channel"],
+        result["notes_channel"], result["mirror_channel"],
+        result["chat_channel"], result["advisory_channel"],
     }, fake.invites
     assert all(u == "UBEN" for _, u in fake.invites), fake.invites
-    # All three keys present and non-null.
-    assert set(result.keys()) == {"notes_channel", "mirror_channel", "chat_channel"}
+    # All four keys present and non-null.
+    assert set(result.keys()) == {
+        "notes_channel", "mirror_channel", "chat_channel", "advisory_channel",
+    }
     assert all(v for v in result.values()), result
-    return "name_taken reused via conversations_list; Ben invited; all 3 ids returned"
+    return "name_taken reused via conversations_list; Ben invited; all 4 ids returned"
 
 
 def scenario_archive_per_id_ignores_already():
