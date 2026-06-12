@@ -35,9 +35,12 @@ from research.store import ResearchStore  # noqa: E402
 import cron_control  # noqa: E402
 import instance_control  # noqa: E402
 from instances_common import (  # noqa: E402
-    active_instance_id,
+    active_instance_ids,
     list_instances,
     load_instance,
+    registry_entry,
+    registry_txn,
+    save_config,
 )
 from system_prompt import SYSTEM_PROMPT  # noqa: E402
 from agent_tools.registry import TOOLS_SPEC  # noqa: E402
@@ -125,7 +128,8 @@ def _resolve_instance():
 
     Preference order:
       1. ?instance=<id> if it names a loadable instance
-      2. the registry's active instance
+      2. the most-recently-woken active instance (fork branches can co-run, so
+         there may be several active; pick deterministically by last_wake)
       3. the first instance from list_instances()
     Returns an Instance or None (zero instances / all unloadable).
     """
@@ -136,10 +140,7 @@ def _resolve_instance():
     candidates: list[str] = []
     if requested and requested in valid_ids:
         candidates.append(requested)
-    active = active_instance_id()
-    if active and active in valid_ids:
-        candidates.append(active)
-    candidates.extend(i["id"] for i in instances)
+    candidates.extend(iid for iid in active_instance_ids() if iid in valid_ids)
 
     for iid in candidates:
         try:
@@ -182,16 +183,27 @@ def _inject_instance_context():
     if inst is not None:
         # Find the registry entry for richer status/active fields.
         entry = next((i for i in instances if i["id"] == inst.id), None)
+        branch_label = (entry or {}).get("branch_label") or inst.config.get("branch_label")
         selected = {
             "id": inst.id,
             "name": inst.name,
             "version": inst.version,
             "status": (entry or {}).get("status"),
             "active": (entry or {}).get("active", False),
+            # lineage (None for non-forked instances)
+            "branch_label": branch_label,
+            "parent_id": (entry or {}).get("parent_id") or inst.config.get("parent_id"),
+            "fork_group": (entry or {}).get("fork_group") or inst.config.get("fork_group"),
+            "cycle_label": None,
         }
         try:
             store = EpisodicStore(inst.episodes_db)
             cost_total = sum(float(r["cost_usd"]) for r in store.cost_by_day())
+            # cycle label e.g. "8a": the cycle this branch is on (its next
+            # invocation number) + branch letter — matches the fork naming, and
+            # advances 8a -> 9a -> ... as the branch runs.
+            if branch_label:
+                selected["cycle_label"] = f"{store.next_invocation_num()}{branch_label}"
         except Exception:
             cost_total = 0.0
     return {
@@ -1166,6 +1178,23 @@ def resume():
         return redirect(url_for("index", instance=iid, control="badpass"))
 
     prior = instance_control.clear_paused(iid)
+
+    # Restore registry + config status to "active" (pause set it to "paused").
+    try:
+        with registry_txn() as reg:
+            ent = registry_entry(reg, iid)
+            if ent is not None:
+                ent["status"] = "active"
+                ent["active"] = True
+        try:
+            inst = load_instance(iid)
+            inst.config["status"] = "active"
+            save_config(iid, inst.config)
+        except Exception:
+            app.logger.exception("resume: failed to sync status to config.json (non-fatal)")
+    except Exception:
+        app.logger.exception("resume: failed to update registry status (non-fatal)")
+
     now = datetime.now(UTC)
     paused_at = _parse_iso(prior.get("paused_at"))
     if paused_at is not None:

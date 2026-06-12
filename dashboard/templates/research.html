@@ -34,6 +34,13 @@
               {% else %}<span class="pill muted">certainty: {{ h.certainty }}</span>{% endif %}
             {% endif %}
           </div>
+          {% if spec %}
+            {% for sh in spec.hypotheses if sh.id == h.id %}
+              <blockquote class="small" style="margin:6px 0; padding:4px 0 4px 10px; border-left:3px solid var(--border,#333);">
+                <span class="ts">original hypothesis:</span> {{ sh.statement }}
+              </blockquote>
+            {% endfor %}
+          {% endif %}
           {% if h.plain_finding %}<p style="margin:6px 0;">{{ h.plain_finding }}</p>{% endif %}
           {% if h.certainty_reasons %}<div class="small ts">why this certainty: {{ h.certainty_reasons|join('; ') }}</div>{% endif %}
           <div class="small">

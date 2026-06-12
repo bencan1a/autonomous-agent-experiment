@@ -496,7 +496,7 @@
       {% for inst in instances %}
         <option value="{{ inst.id }}"
           {% if selected_instance and inst.id == selected_instance.id %}selected{% endif %}>
-          {{ inst.name }} ({{ inst.status }}){% if inst.active %} ★{% endif %}
+          {{ inst.name }}{% if inst.branch_label %} [branch {{ inst.branch_label }}]{% endif %} ({{ inst.status }}){% if inst.active %} ★{% endif %}
         </option>
       {% endfor %}
     </select>
@@ -511,6 +511,9 @@
         <span class="pill muted">{{ ist }}</span>
       {% else %}
         <span class="pill">{{ ist or '—' }}</span>
+      {% endif %}
+      {% if selected_instance.cycle_label %}
+        <span class="pill" title="fork branch '{{ selected_instance.branch_label }}' of {{ selected_instance.parent_id }} — current cycle">cycle {{ selected_instance.cycle_label }}</span>
       {% endif %}
       <span class="cost">cost <span class="num">${{ '%.2f'|format(instance_cost_total or 0.0) }}</span></span>
     {% endif %}
