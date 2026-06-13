@@ -1301,9 +1301,16 @@ def _experiment_hypothesis(instance_id: str) -> str | None:
     blurb = "\n".join(body).strip()
     if not blurb:
         return None
-    # Full text — the overview clamps it visually (.clamp10) with a JS
-    # show-more/less toggle, so no server-side truncation is needed.
-    return blurb
+    # Reflow: the source .md is hard-wrapped at ~90 cols, so rendering it verbatim
+    # (white-space: pre-line) would keep those breaks and pin the text to ~60% of
+    # the box. Collapse each paragraph's soft-wrap newlines to spaces; keep blank
+    # lines as paragraph breaks so the prose flows to the full container width.
+    # (Any list items, separated by single newlines, flow inline — fine for this
+    # raw, unrendered blurb.) The overview then clamps it visually with a toggle.
+    paragraphs = [
+        " ".join(part.split()) for part in re.split(r"\n\s*\n", blurb)
+    ]
+    return "\n\n".join(p for p in paragraphs if p)
 
 
 def _experiment_properties(instance) -> list[str]:

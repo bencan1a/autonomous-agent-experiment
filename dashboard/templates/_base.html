@@ -588,23 +588,8 @@
   {% endif %}
   </div>
   {% endif %}
-  <div class="meta">
-    {% if status %}
-      {% if status.state == 'running' %}
-        <span class="pill ok">● {{ status.label or 'running' }}</span>
-      {% elif status.state == 'stale' %}
-        <span class="pill bad">⚠ stale (process died)</span>
-      {% elif status.state == 'scheduled' %}
-        <span class="pill dim">● scheduled</span>
-      {% elif status.state == 'stopped' %}
-        <span class="pill muted">○ stopped</span>
-      {% else %}
-        <span class="pill warn">{{ status.state }}</span>
-      {% endif %}
-    {% endif %}
-    {% block header_meta %}{% endblock %}
-    <span class="meta-time">&nbsp; {{ now }}</span>
-  </div>
+  {# Run-status + clock moved out of the header (it wrapped to a 2nd row when a
+     session is live). Status is shown in the overview's "Next invocation" box. #}
 </header>
 
 <main>
