@@ -613,13 +613,38 @@ function openNewInstance() {
   var p = document.getElementById("new-instance-panel");
   if (!p) return;
   p.classList.add("open");
+  pauseAutoRefresh();  // don't let a 20s reload nuke the half-filled form
   var n = document.getElementById("ni-name");
   if (n) { n.focus(); n.select(); }
 }
 function closeNewInstance() {
   var p = document.getElementById("new-instance-panel");
   if (p) p.classList.remove("open");
+  resumeAutoRefresh();
 }
+
+/* Live auto-refresh controller. A page opts in by setting
+   window.AUTO_REFRESH_SECONDS (see index.html's head_extra). We reload on a JS
+   timer rather than <meta refresh> so it can be paused while the new-instance
+   panel is open — a 20s reload would otherwise wipe a half-filled form. */
+var _autoRefreshTimer = null;
+function scheduleAutoRefresh() {
+  if (!window.AUTO_REFRESH_SECONDS || _autoRefreshTimer) return;
+  _autoRefreshTimer = window.setTimeout(function () {
+    window.location.reload();
+  }, window.AUTO_REFRESH_SECONDS * 1000);
+}
+function pauseAutoRefresh() {
+  if (_autoRefreshTimer) { window.clearTimeout(_autoRefreshTimer); _autoRefreshTimer = null; }
+}
+function resumeAutoRefresh() {
+  // Only re-arm if the panel is closed, so close-then-nothing resumes but
+  // close called while still open (shouldn't happen) stays paused.
+  var p = document.getElementById("new-instance-panel");
+  if (p && p.classList.contains("open")) return;
+  scheduleAutoRefresh();
+}
+scheduleAutoRefresh();
 </script>
 <script>
 /* Make data tables card-stackable on narrow viewports: copy each column
