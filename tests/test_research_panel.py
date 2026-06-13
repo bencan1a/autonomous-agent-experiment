@@ -29,6 +29,8 @@ for _k in ("ANTHROPIC_API_KEY", "SLACK_BOT_TOKEN", "BRAVE_API_KEY"):
 logging.getLogger("research.panel").setLevel(logging.CRITICAL)
 logging.getLogger("research.spec").setLevel(logging.CRITICAL)
 logging.getLogger("research.prereg").setLevel(logging.CRITICAL)
+logging.getLogger("orchestrator.v2").setLevel(logging.CRITICAL)
+logging.getLogger("orchestrator.engine").setLevel(logging.CRITICAL)
 
 import instances_common  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402

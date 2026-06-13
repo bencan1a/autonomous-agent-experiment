@@ -45,8 +45,10 @@ for _k in (
 # The loop logs expected warnings (e.g. the slack=None path) via log.exception;
 # silence the orchestrator logger so test output stays clean.
 logging.getLogger("orchestrator.v2").setLevel(logging.CRITICAL)
+logging.getLogger("orchestrator.engine").setLevel(logging.CRITICAL)
 
 import v2_session  # noqa: E402
+import session_engine  # noqa: E402  (preamble/finalize deps now live here)
 import instances_common  # noqa: E402
 from agent_tools.registry import ToolContext, dispatch  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402
@@ -118,7 +120,7 @@ class Patches:
         self._saved = {}
 
     def __enter__(self):
-        m = v2_session
+        m = session_engine
         self._saved = {
             "anthropic": m.anthropic,
             "SlackClient": m.SlackClient,
@@ -152,7 +154,7 @@ class Patches:
 
     def __exit__(self, *exc):
         for k, v in self._saved.items():
-            setattr(v2_session, k, v)
+            setattr(session_engine, k, v)
         return False
 
 

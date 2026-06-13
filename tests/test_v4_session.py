@@ -54,10 +54,12 @@ for _k in (
     os.environ[_k] = "x"
 
 logging.getLogger("orchestrator.v4").setLevel(logging.CRITICAL)
+logging.getLogger("orchestrator.engine").setLevel(logging.CRITICAL)
 logging.getLogger("orchestrator.v3").setLevel(logging.CRITICAL)
 logging.getLogger("orchestrator.v2").setLevel(logging.CRITICAL)
 
 import v4_session  # noqa: E402
+import session_engine  # noqa: E402  (preamble/finalize deps now live here)
 import instances_common  # noqa: E402
 from agent_tools.registry import TOOLS_SPEC_V4  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402
@@ -146,7 +148,7 @@ class Patches:
         self._saved = {}
 
     def __enter__(self):
-        m = v4_session
+        m = session_engine
         self._saved = {
             "anthropic": m.anthropic,
             "SlackClient": m.SlackClient,
@@ -180,7 +182,7 @@ class Patches:
 
     def __exit__(self, *exc):
         for k, v in self._saved.items():
-            setattr(v4_session, k, v)
+            setattr(session_engine, k, v)
         return False
 
 
