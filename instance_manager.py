@@ -10,11 +10,17 @@ to ``cron_control``; instance layout/registry I/O to ``instances_common``.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
+import re
+import shutil
+import sqlite3
 import sys
+from pathlib import Path
 
 import cron_control as cron
+import lockfile
 from instances_common import (
     AGENT_ROOT,
     Instance,
@@ -26,8 +32,8 @@ from instances_common import (
     new_instance_id,
     now_iso,
     registry_entry,
+    registry_txn,
     save_config,
-    save_registry,
     VALID_VERSIONS,
 )
 
@@ -71,15 +77,18 @@ def _set_lifecycle(
     _sync_status(instance_id, status)
 
 
-def _deactivate_others(registry: dict, keep_id: str) -> list[str]:
-    """Pause + unschedule every active instance other than ``keep_id``.
+def _deactivate_unrelated(registry: dict, keep_group: set[str]) -> list[str]:
+    """Pause + unschedule every active instance NOT in ``keep_group``.
 
-    Returns the ids that were deactivated. Mutates ``registry`` in place; the
-    caller is responsible for saving it.
+    Single-active is no longer an invariant: a fork-group's branches stay
+    co-active together. This deactivates only instances outside the group.
+    Returns the ids deactivated. Mutates ``registry`` in place; caller saves it
+    (use ``registry_txn``). Calls ``cron.clear_instance`` while the caller holds
+    the registry lock — registry-before-crontab order, never the reverse.
     """
     deactivated: list[str] = []
     for iid, ent in registry.get("instances", {}).items():
-        if iid == keep_id or not ent.get("active"):
+        if iid in keep_group or not ent.get("active"):
             continue
         cron.clear_instance(iid)
         _set_lifecycle(registry, iid, status="paused", active=False)
@@ -87,19 +96,22 @@ def _deactivate_others(registry: dict, keep_id: str) -> list[str]:
     return deactivated
 
 
-def _activate(registry: dict, instance_id: str, minutes_from_now: int) -> None:
-    """Shared activate/resume core: become the sole active instance + schedule."""
-    others = _deactivate_others(registry, instance_id)
-    _set_lifecycle(registry, instance_id, status="active", active=True)
-    save_registry(registry)
+def _activate_group(
+    registry: dict, instance_ids: list[str], minutes_from_now: int
+) -> list[str]:
+    """Make exactly ``instance_ids`` the active set; pause all others; schedule each.
 
-    cron.install_instance_one_shot(instance_id, minutes_from_now=minutes_from_now)
-    nf = cron.next_fire_at(instance_id)
-
-    if others:
-        print(f"deactivated: {', '.join(others)}")
-    print(f"activated '{instance_id}'")
-    print(f"  next wake scheduled: {nf.isoformat() if nf else '(unknown)'}")
+    Mutates ``registry`` in place; the caller saves it (use ``registry_txn``).
+    A group of one reproduces the old single-active behavior. Returns the ids
+    that were deactivated.
+    """
+    keep = set(instance_ids)
+    deactivated = _deactivate_unrelated(registry, keep)
+    for iid in instance_ids:
+        _set_lifecycle(registry, iid, status="active", active=True)
+    for iid in instance_ids:
+        cron.install_instance_one_shot(iid, minutes_from_now=minutes_from_now)
+    return deactivated
 
 
 # --------------------------------------------------------------------------- #
@@ -159,6 +171,311 @@ def _archive_slack_channels(instance_id: str) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# fork: split a running instance into concurrent branches
+# --------------------------------------------------------------------------- #
+
+# Research tables whose rows key on experiment_id (== instance id) and so must
+# be rewritten to the child id when the parent's episodes.db is copied. Every
+# other research table keys on session_id / ben_contact_id and is preserved
+# verbatim by the byte-for-byte copy (the session ids are unchanged). See the
+# review-board audit in the plan.
+_RESEARCH_EXPERIMENT_ID_TABLES = (
+    "research_prereg",
+    "research_cumulative",
+    "research_proposals",
+)
+
+
+def _deep_merge(dst: dict, patch: dict) -> dict:
+    """Recursively merge ``patch`` into ``dst`` in place (dicts merge, else replace)."""
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
+
+
+def _parent_is_quiesced(parent: Instance) -> tuple[bool, str]:
+    """True if no live orchestrator holds the parent's lock (safe to snapshot)."""
+    pid = lockfile.read_pid(parent.lock_path)
+    if pid is None:
+        return True, ""
+    if lockfile.is_pid_alive(pid) and lockfile._pid_is_orchestrator(pid):
+        return False, (
+            f"parent '{parent.id}' has a live orchestrator (pid {pid}); "
+            "wait for the session to finish before forking"
+        )
+    return True, ""
+
+
+def _checkpoint_db(db_path: Path) -> None:
+    """Flush any WAL into the main db file so a single-file copy is complete."""
+    if not db_path.exists():
+        return
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.commit()
+    finally:
+        con.close()
+
+
+def _copy_db(src: Path, dst: Path) -> None:
+    _checkpoint_db(src)
+    shutil.copy2(src, dst)
+    # Copy WAL/SHM siblings if present (post-checkpoint they're usually empty,
+    # but copy them so the child is byte-consistent regardless of journal mode).
+    for suffix in ("-wal", "-shm"):
+        sib = Path(str(src) + suffix)
+        if sib.exists():
+            shutil.copy2(sib, Path(str(dst) + suffix))
+
+
+def _rewrite_research_ids(db_path: Path, parent_id: str, child_id: str) -> None:
+    """Point the experiment_id-keyed research rows at the child instance."""
+    if not db_path.exists():
+        return
+    con = sqlite3.connect(str(db_path))
+    try:
+        existing = {
+            r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        for tbl in _RESEARCH_EXPERIMENT_ID_TABLES:
+            if tbl in existing:
+                con.execute(
+                    f"UPDATE {tbl} SET experiment_id=? WHERE experiment_id=?",
+                    (child_id, parent_id),
+                )
+        if "research_prereg" in existing:
+            con.execute(
+                "UPDATE research_prereg SET spec_source=REPLACE(spec_source, ?, ?) "
+                "WHERE spec_source LIKE ?",
+                (
+                    f"/experiments/{parent_id}.md",
+                    f"/experiments/{child_id}.md",
+                    f"%/experiments/{parent_id}.md",
+                ),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _write_child_spec(parent_id: str, child_id: str, override_spec: str | None) -> bool:
+    """Create experiments/<child>.md from the parent's spec (or an override file).
+
+    Rewrites the yaml ``experiment_id:`` line to the child id so ``load_spec``
+    does not flag a mismatch. Returns False if there is no source spec to copy.
+    """
+    src = Path(override_spec) if override_spec else AGENT_ROOT / "experiments" / f"{parent_id}.md"
+    if not src.exists():
+        return False
+    text = src.read_text(encoding="utf-8")
+    text = re.subn(r"(?m)^(experiment_id:\s*).*$", rf"\g<1>{child_id}", text, count=1)[0]
+    (AGENT_ROOT / "experiments" / f"{child_id}.md").write_text(text, encoding="utf-8")
+    return True
+
+
+def _materialize_branch(
+    parent: Instance,
+    child_id: str,
+    *,
+    branch_label: str,
+    fork_group: str,
+    forked_at_invocation: int,
+    override: dict,
+) -> None:
+    """Create the child instance dir: snapshot copy + config + spec + primers.
+
+    Pure local filesystem/DB work — takes no registry/cron locks. Leaves the
+    child paused and unregistered; the caller registers + activates it.
+    """
+    cfg = copy.deepcopy(parent.config)
+    cfg["name"] = override.get("name") or f"{parent.name} [{branch_label}]"
+    cfg["status"] = "paused"
+    cfg["slack"] = {
+        "notes_channel": None, "mirror_channel": None,
+        "chat_channel": None, "advisory_channel": None,
+    }
+    cfg["parent_id"] = parent.id
+    cfg["branch_label"] = branch_label
+    cfg["fork_group"] = fork_group
+    cfg["forked_at_invocation"] = forked_at_invocation
+
+    child = Instance(child_id, instance_dir(child_id), cfg)
+    child.ensure_dirs()
+
+    # Full state snapshot (gives the agent seamless continuity).
+    _copy_db(parent.episodes_db, child.episodes_db)
+    if parent.vectors_dir.exists():
+        shutil.copytree(parent.vectors_dir, child.vectors_dir, dirs_exist_ok=True)
+    if parent.workspace_dir.exists():
+        shutil.copytree(parent.workspace_dir, child.workspace_dir, dirs_exist_ok=True)
+
+    _rewrite_research_ids(child.episodes_db, parent.id, child_id)
+
+    # Per-branch primer variants (kept outside the workspace -> not agent-visible).
+    if override.get("primers"):
+        pdir = child.root / "research_primers"
+        pdir.mkdir(parents=True, exist_ok=True)
+        rels: list[str] = []
+        for srcp in override["primers"]:
+            srcp = Path(srcp)
+            dstp = pdir / srcp.name
+            shutil.copy2(srcp, dstp)
+            rels.append(str(dstp.relative_to(AGENT_ROOT)))
+        cfg.setdefault("research", {})["primers"] = rels
+
+    if override.get("config"):
+        _deep_merge(cfg, override["config"])
+
+    save_config(child_id, cfg)
+    _write_child_spec(parent.id, child_id, override.get("spec"))
+
+
+def fork_instance(
+    parent_id: str,
+    branch_labels: list[str],
+    *,
+    at_invocation: int | None = None,
+    overrides: dict | None = None,
+    freeze_parent: bool = True,
+    do_slack: bool = True,
+    include_mirror: bool = False,
+    dry_run: bool = False,
+    private: bool = False,
+    minutes_from_now: int | None = None,
+) -> list[str]:
+    """Fork ``parent_id`` into one co-active branch per label. Returns child ids.
+
+    Each child is a full instance that continues seamlessly from the parent at
+    its current cycle: copied memory (episodes.db + vectors), workspace handoff,
+    spent budget, and best-effort Slack history. Branches run concurrently; the
+    parent is frozen (paused) unless ``freeze_parent=False``.
+
+    ``overrides`` maps a branch label to ``{"config": {...patch}, "spec": path,
+    "primers": [paths], "name": str}`` — anything omitted is inherited.
+    """
+    overrides = overrides or {}
+    minutes = minutes_from_now if minutes_from_now is not None else cron.MIN_INTERVAL_MINUTES
+
+    registry = load_registry()
+    if registry_entry(registry, parent_id) is None:
+        raise ValueError(f"no such instance: {parent_id}")
+    parent = load_instance(parent_id)
+
+    ok, why = _parent_is_quiesced(parent)
+    if not ok:
+        raise RuntimeError(why)
+
+    from memory.episodic import EpisodicStore
+
+    next_inv = EpisodicStore(parent.episodes_db).next_invocation_num()
+    fork_point = at_invocation if at_invocation is not None else next_inv - 1
+    first_cycle = next_inv  # the branch's first new cycle == its display number
+    parent_label = parent.config.get("branch_label") or ""
+    fork_group = f"{parent_id}@{fork_point}:{'.'.join(sorted(branch_labels))}"
+
+    # Allocate child ids (deterministic, collision-free) against a working copy.
+    working = copy.deepcopy(registry)
+    plan: list[dict] = []
+    for label in branch_labels:
+        composed = parent_label + label
+        child_id = new_instance_id(f"{parent_id}-{first_cycle}{label}", working)
+        working.setdefault("instances", {})[child_id] = {}  # reserve for next alloc
+        plan.append({"label": label, "composed": composed, "child_id": child_id})
+
+    if dry_run:
+        print(f"[dry-run] fork '{parent_id}' at cycle {fork_point} "
+              f"(branch first cycle {first_cycle}); parent will be "
+              f"{'frozen' if freeze_parent else 'kept active'}:")
+        for p in plan:
+            ov = overrides.get(p["label"], {})
+            print(f"  - {p['child_id']}  (label {first_cycle}{p['composed']}) "
+                  f"overrides={ {k: v for k, v in ov.items()} }")
+        print(f"  slack: {'provision + replay' if do_slack else 'skipped'}; "
+              f"fork_group={fork_group}")
+        return [p["child_id"] for p in plan]
+
+    # Quiesce the parent's schedule so no wake fires mid-copy.
+    cron.clear_instance(parent_id)
+
+    # --- local snapshot work (no locks held) ---
+    for p in plan:
+        _materialize_branch(
+            parent, p["child_id"],
+            branch_label=p["composed"], fork_group=fork_group,
+            forked_at_invocation=fork_point, override=overrides.get(p["label"], {}),
+        )
+
+    # --- register + co-activate (registry lock, then crontab lock) ---
+    child_ids = [p["child_id"] for p in plan]
+    group = list(child_ids) + ([] if freeze_parent else [parent_id])
+    with registry_txn() as reg:
+        for p in plan:
+            if registry_entry(reg, p["child_id"]) is not None:
+                raise RuntimeError(f"child id {p['child_id']} already exists (raced)")
+            reg["instances"][p["child_id"]] = {
+                "id": p["child_id"],
+                "name": load_instance(p["child_id"]).config.get("name", p["child_id"]),
+                "version": parent.version,
+                "status": "paused",
+                "created_at": now_iso(),
+                "active": False,
+                "last_wake": (registry_entry(registry, parent_id) or {}).get("last_wake"),
+                "parent_id": parent_id,
+                "branch_label": p["composed"],
+                "fork_group": fork_group,
+                "forked_at_invocation": fork_point,
+            }
+        _activate_group(reg, group, minutes)
+
+    # --- Slack: provision each child's channels + replay parent history ---
+    if do_slack:
+        for p in plan:
+            _fork_slack(parent, p["child_id"], private=private, include_mirror=include_mirror)
+
+    return child_ids
+
+
+def _fork_slack(parent: Instance, child_id: str, *, private: bool, include_mirror: bool) -> None:
+    """Provision the child's Slack channels and seed them from the parent's.
+
+    Best-effort and non-fatal: a Slack failure leaves the child usable with
+    whatever channels were created and never aborts the fork.
+    """
+    try:
+        token, ben = _slack_creds()
+        channels = _provision_and_save(child_id, private=private)
+    except Exception as exc:  # noqa: BLE001 — best-effort, like cmd_create
+        print(f"warning: could not provision Slack for '{child_id}': {exc}", file=sys.stderr)
+        return
+
+    from communications.slack_replay import replay_channel_history
+
+    parent_slack = parent.config.get("slack") or {}
+    # chat + notes carry observer value; mirror is high-volume (opt-in); never advisory.
+    pairs = [("chat_channel", "chat"), ("notes_channel", "notes")]
+    if include_mirror:
+        pairs.append(("mirror_channel", "mirror"))
+    for key, label in pairs:
+        src = parent_slack.get(key)
+        dst = channels.get(key)
+        if not src or not dst:
+            continue
+        try:
+            replay_channel_history(
+                bot_token=token, src_channel_id=src, dst_channel_id=dst,
+                ben_user_id=ben, header=f"_(history replayed from {parent.id} at fork)_",
+            )
+        except Exception as exc:  # noqa: BLE001 — replay is best-effort
+            print(f"warning: replay of {label} for '{child_id}' failed: {exc}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
 # subcommands
 # --------------------------------------------------------------------------- #
 
@@ -166,29 +483,28 @@ def cmd_create(args: argparse.Namespace) -> int:
     if args.version not in VALID_VERSIONS:
         return _err(f"invalid version {args.version!r}; expected one of {VALID_VERSIONS}")
 
-    registry = load_registry()
-    instance_id = new_instance_id(args.name, registry)
-    if registry_entry(registry, instance_id) is not None:
-        return _err(f"instance '{instance_id}' already exists")
+    with registry_txn() as registry:
+        instance_id = new_instance_id(args.name, registry)
+        if registry_entry(registry, instance_id) is not None:
+            return _err(f"instance '{instance_id}' already exists")
 
-    config = default_config(
-        args.name, args.version, model=args.model, status="paused"
-    )
+        config = default_config(
+            args.name, args.version, model=args.model, status="paused"
+        )
 
-    inst = Instance(instance_id, instance_dir(instance_id), config)
-    inst.ensure_dirs()
-    save_config(instance_id, config)
+        inst = Instance(instance_id, instance_dir(instance_id), config)
+        inst.ensure_dirs()
+        save_config(instance_id, config)
 
-    registry.setdefault("instances", {})[instance_id] = {
-        "id": instance_id,
-        "name": args.name,
-        "version": args.version,
-        "status": "paused",
-        "created_at": now_iso(),
-        "active": False,
-        "last_wake": None,
-    }
-    save_registry(registry)
+        registry.setdefault("instances", {})[instance_id] = {
+            "id": instance_id,
+            "name": args.name,
+            "version": args.version,
+            "status": "paused",
+            "created_at": now_iso(),
+            "active": False,
+            "last_wake": None,
+        }
 
     print(f"created instance: {instance_id}")
 
@@ -209,6 +525,48 @@ def cmd_create(args: argparse.Namespace) -> int:
             f"    2. Run: instance_manager.py slack-provision {instance_id}",
             file=sys.stderr,
         )
+    return 0
+
+
+def _parse_overrides(path: str | None) -> dict:
+    if not path:
+        return {}
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("overrides file must be a JSON object mapping label -> patch")
+    return data
+
+
+def cmd_fork(args: argparse.Namespace) -> int:
+    labels = [s.strip() for s in args.branches.split(",") if s.strip()]
+    if not labels:
+        return _err("--branches must list at least one label, e.g. --branches a,b")
+    if len(set(labels)) != len(labels):
+        return _err("--branches labels must be unique")
+    try:
+        overrides = _parse_overrides(args.overrides)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _err(f"could not read --overrides: {exc}")
+    try:
+        child_ids = fork_instance(
+            args.id, labels,
+            at_invocation=args.at_invocation,
+            overrides=overrides,
+            freeze_parent=not args.keep_parent,
+            do_slack=not args.no_slack,
+            include_mirror=args.include_mirror,
+            dry_run=args.dry_run,
+            private=args.private,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return _err(str(exc))
+    if args.dry_run:
+        return 0
+    print(f"forked '{args.id}' -> {', '.join(child_ids)} (co-active)")
+    print(f"  parent '{args.id}' {'kept active' if args.keep_parent else 'frozen (paused)'}")
+    for cid in child_ids:
+        nf = cron.next_fire_at(cid)
+        print(f"  {cid} next wake: {nf.isoformat() if nf else '(unknown)'}")
     return 0
 
 
@@ -242,18 +600,28 @@ def cmd_activate(args: argparse.Namespace) -> int:
             "reactivate it (it will transition archived -> active)"
         )
     minutes = args.in_minutes if args.in_minutes is not None else cron.MIN_INTERVAL_MINUTES
-    _activate(registry, args.id, minutes)
+    with registry_txn() as reg:
+        deactivated = _activate_group(reg, [args.id], minutes)
+    _report_activation([args.id], deactivated)
     return 0
+
+
+def _report_activation(activated: list[str], deactivated: list[str]) -> None:
+    if deactivated:
+        print(f"deactivated: {', '.join(deactivated)}")
+    print(f"activated: {', '.join(activated)}")
+    for iid in activated:
+        nf = cron.next_fire_at(iid)
+        print(f"  {iid} next wake: {nf.isoformat() if nf else '(unknown)'}")
 
 
 def cmd_pause(args: argparse.Namespace) -> int:
     registry = load_registry()
-    ent = registry_entry(registry, args.id)
-    if ent is None:
+    if registry_entry(registry, args.id) is None:
         return _err(f"no such instance: {args.id}")
     cron.clear_instance(args.id)
-    _set_lifecycle(registry, args.id, status="paused", active=False)
-    save_registry(registry)
+    with registry_txn() as reg:
+        _set_lifecycle(reg, args.id, status="paused", active=False)
     print(f"paused '{args.id}' (data retained, schedule cleared)")
     return 0
 
@@ -267,18 +635,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return _err(
             f"instance '{args.id}' is archived; cannot resume an archived instance"
         )
-    _activate(registry, args.id, cron.MIN_INTERVAL_MINUTES)
+    with registry_txn() as reg:
+        deactivated = _activate_group(reg, [args.id], cron.MIN_INTERVAL_MINUTES)
+    _report_activation([args.id], deactivated)
     return 0
 
 
 def cmd_archive(args: argparse.Namespace) -> int:
     registry = load_registry()
-    ent = registry_entry(registry, args.id)
-    if ent is None:
+    if registry_entry(registry, args.id) is None:
         return _err(f"no such instance: {args.id}")
     cron.clear_instance(args.id)
-    _set_lifecycle(registry, args.id, status="archived", active=False)
-    save_registry(registry)
+    with registry_txn() as reg:
+        _set_lifecycle(reg, args.id, status="archived", active=False)
     print(f"archived '{args.id}' (data retained)")
 
     # Best-effort: archive the instance's Slack channels too.
@@ -387,6 +756,119 @@ def cmd_slack_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_store_and_prereg(instance_id: str):
+    """Return (instance, ResearchStore, spec, prereg) or an error code.
+
+    The prereg returned is the one matching the *current* formal spec when a row
+    for it exists, otherwise the latest. Returns an int (error code) on failure.
+    """
+    registry = load_registry()
+    if registry_entry(registry, instance_id) is None:
+        return _err(f"no such instance: {instance_id}")
+    try:
+        inst = load_instance(instance_id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    from research.spec import load_spec
+    from research.store import ResearchStore
+
+    spec = load_spec(AGENT_ROOT, instance_id)
+    rs = ResearchStore(inst.episodes_db)
+    prereg = None
+    if spec is not None:
+        prereg = rs.get_prereg(instance_id, spec.spec_hash)
+    if prereg is None:
+        prereg = rs.latest_prereg(instance_id)
+    return inst, rs, spec, prereg
+
+
+def cmd_research_show(args: argparse.Namespace) -> int:
+    got = _research_store_and_prereg(args.id)
+    if isinstance(got, int):
+        return got
+    inst, rs, spec, prereg = got
+    if spec is None:
+        print(f"'{args.id}': no formal spec block in experiments/{args.id}.md "
+              "(panel will no-op until one is authored).")
+    else:
+        print(f"'{args.id}': formal spec v{spec.spec_version}, "
+              f"{len(spec.hypotheses)} hypotheses, spec_hash={spec.spec_hash[:12]}")
+    if prereg is None:
+        print("  no coding scheme operationalized yet (run a session).")
+        return 0
+    print(f"  coding scheme: status={prereg.get('status')} "
+          f"(spec_hash={str(prereg.get('spec_hash'))[:12]})")
+    for c in prereg.get("code_vocab") or []:
+        maps = f" [{c.get('maps_to_hypothesis')}]" if c.get("maps_to_hypothesis") else ""
+        print(f"    - {c.get('code')}{maps}: {c.get('definition')}")
+    return 0
+
+
+def cmd_research_approve(args: argparse.Namespace) -> int:
+    got = _research_store_and_prereg(args.id)
+    if isinstance(got, int):
+        return got
+    inst, rs, spec, prereg = got
+    if prereg is None:
+        return _err(
+            f"no coding scheme to approve for '{args.id}' yet — run a session so the "
+            "panel operationalizes the spec (and confirm experiments/"
+            f"{args.id}.md has a formal spec block)."
+        )
+    if prereg.get("status") == "approved":
+        print(f"'{args.id}': coding scheme already approved.")
+        return 0
+    print(f"Approving this coding scheme for '{args.id}':")
+    for c in prereg.get("code_vocab") or []:
+        print(f"    - {c.get('code')}: {c.get('definition')}")
+    if rs.approve_prereg(args.id, prereg.get("spec_hash")):
+        print("approved — new per-session research notes will be marked 'binding'.")
+        return 0
+    return _err("approval did not match any coding-scheme row.")
+
+
+def cmd_research_synthesize(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    if registry_entry(registry, args.id) is None:
+        return _err(f"no such instance: {args.id}")
+    try:
+        inst = load_instance(args.id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    # Shell may export ANTHROPIC_API_KEY=""; force it from .env (as the runners do).
+    try:
+        from dotenv import load_dotenv as _ld
+        _ld(AGENT_ROOT / ".env", override=True)
+    except Exception:
+        pass
+    import os as _os
+
+    import anthropic
+    from memory.episodic import EpisodicStore
+    from research.store import ResearchStore
+    from research.synthesis import run_cumulative_synthesis
+
+    client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
+    ep = EpisodicStore(inst.episodes_db)
+    rs = ResearchStore(inst.episodes_db)
+    semantic = None
+    if not args.no_embed:
+        from memory.semantic import SemanticStore
+        semantic = SemanticStore(inst.vectors_dir)
+    print(f"Refreshing cumulative synthesis for '{inst.id}' (real API spend)...")
+    res = run_cumulative_synthesis(
+        instance=inst, episodic=ep, research_store=rs,
+        anthropic_client=client, agent_root=AGENT_ROOT, semantic=semantic,
+    )
+    if not res:
+        print("  no report produced (no spec / no coding scheme / disabled).")
+        return 0
+    print(f"  {res.get('status')} · cost=${res.get('cost_usd', 0):.4f} "
+          f"drift_flagged={res.get('drift_flagged')}"
+          f"{' [degraded]' if res.get('degraded') else ''}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
@@ -408,6 +890,43 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = sub.add_parser("list", help="list all instances")
     p_list.set_defaults(func=cmd_list)
+
+    p_fork = sub.add_parser(
+        "fork", help="fork a running instance into concurrent branches (8a, 8b, ...)"
+    )
+    p_fork.add_argument("id", help="parent instance id")
+    p_fork.add_argument(
+        "--branches", required=True,
+        help="comma-separated branch labels, e.g. a,b",
+    )
+    p_fork.add_argument(
+        "--at-invocation", type=int, default=None, dest="at_invocation",
+        help="label-only fork point N (default: the parent's last completed cycle)",
+    )
+    p_fork.add_argument(
+        "--overrides", default=None,
+        help="JSON file mapping label -> {config, spec, primers, name} per-branch overrides",
+    )
+    p_fork.add_argument(
+        "--keep-parent", action="store_true",
+        help="leave the parent active and co-running (default: freeze/pause it)",
+    )
+    p_fork.add_argument(
+        "--include-mirror", action="store_true",
+        help="also replay the high-volume -mirror channel (default: chat + notes only)",
+    )
+    p_fork.add_argument(
+        "--no-slack", action="store_true",
+        help="skip Slack channel provisioning + history replay",
+    )
+    p_fork.add_argument(
+        "--private", action="store_true", help="create private Slack channels",
+    )
+    p_fork.add_argument(
+        "--dry-run", action="store_true",
+        help="print the fork plan without copying/registering/scheduling anything",
+    )
+    p_fork.set_defaults(func=cmd_fork)
 
     p_activate = sub.add_parser("activate", help="make an instance the sole active one")
     p_activate.add_argument("id", help="instance id")
@@ -454,6 +973,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--episodes", type=int, default=5, help="number of recent episodes to show"
     )
     p_show.set_defaults(func=cmd_show)
+
+    p_research = sub.add_parser(
+        "research", help="research panel: review/approve the operationalized coding scheme"
+    )
+    rsub = p_research.add_subparsers(dest="research_cmd", required=True)
+    p_r_show = rsub.add_parser("show", help="show the formal spec + coding scheme + status")
+    p_r_show.add_argument("id", help="instance id")
+    p_r_show.set_defaults(func=cmd_research_show)
+    p_r_approve = rsub.add_parser(
+        "approve", help="approve the coding scheme (makes per-session notes 'binding')"
+    )
+    p_r_approve.add_argument("id", help="instance id")
+    p_r_approve.set_defaults(func=cmd_research_approve)
+    p_r_syn = rsub.add_parser(
+        "synthesize", help="refresh the rolling cumulative report (real API spend)"
+    )
+    p_r_syn.add_argument("id", help="instance id")
+    p_r_syn.add_argument("--no-embed", action="store_true",
+                         help="skip embedding the report summary")
+    p_r_syn.set_defaults(func=cmd_research_synthesize)
 
     return parser
 

@@ -221,8 +221,7 @@ class Patches:
             "SemanticStore": m.SemanticStore,
             "cron_control": m.cron_control,
             "lockfile": m.lockfile,
-            "load_registry": m.load_registry,
-            "save_registry": m.save_registry,
+            "registry_txn": m.registry_txn,
         }
         m.anthropic = make_fake_anthropic(self.client)
         if self.slack is not None:
@@ -236,8 +235,14 @@ class Patches:
         m.SemanticStore = lambda *a, **kw: sem
         m.cron_control = self.cron
         m.lockfile = self.lock
-        m.load_registry = lambda: {"instances": {}}
-        m.save_registry = lambda reg: None
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _fake_registry_txn():
+            yield {"instances": {}}  # throwaway: writes go nowhere in tests
+
+        m.registry_txn = _fake_registry_txn
         return self
 
     def __exit__(self, *exc):

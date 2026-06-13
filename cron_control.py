@@ -20,12 +20,20 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from lockfile import file_lock
+
 logger = logging.getLogger(__name__)
 
 AGENT_ROOT = Path(__file__).resolve().parent
 TAG_PREFIX = "# agent-instance:"
 LEGACY_MARKER = "# AGENT_ORCHESTRATOR"  # flat-layout v1 entry (pre-migration)
 MIN_INTERVAL_MINUTES = 30
+
+# Serializes every crontab read-modify-write. With fork branches running
+# multiple orchestrators concurrently, two interleaved `crontab -l`/`crontab -`
+# cycles would otherwise clobber each other's lines (a branch could silently
+# lose its next-wake entry). Acquire AFTER the registry lock if holding both.
+CRONTAB_LOCK = AGENT_ROOT / ".crontab.lock"
 
 
 def instance_marker(instance_id: str) -> str:
@@ -66,13 +74,13 @@ def _write_crontab(lines: list[str]) -> None:
 # instance-scoped operations
 # --------------------------------------------------------------------------- #
 
-def remove_instance_entries(instance_id: str) -> int:
-    """Remove the tagged comment line and its following entry line, if present.
+def _filter_instance_lines(lines: list[str], instance_id: str) -> tuple[list[str], int]:
+    """Pure helper: drop the tagged comment + its following entry line.
 
-    Returns the number of lines removed. Untagged lines are never touched.
+    Returns (kept_lines, removed_count). Untagged lines are never touched. Takes
+    no lock — callers hold ``CRONTAB_LOCK`` around the surrounding read+write.
     """
     marker = instance_marker(instance_id)
-    lines = _read_crontab()
     kept: list[str] = []
     skip_next = False
     removed = 0
@@ -87,9 +95,19 @@ def remove_instance_entries(instance_id: str) -> int:
             skip_next = True
             continue
         kept.append(ln)
-    if removed:
-        _write_crontab(kept)
-        logger.info("Removed %d cron line(s) for instance %s", removed, instance_id)
+    return kept, removed
+
+
+def remove_instance_entries(instance_id: str) -> int:
+    """Remove the tagged comment line and its following entry line, if present.
+
+    Returns the number of lines removed. Untagged lines are never touched.
+    """
+    with file_lock(CRONTAB_LOCK):
+        kept, removed = _filter_instance_lines(_read_crontab(), instance_id)
+        if removed:
+            _write_crontab(kept)
+            logger.info("Removed %d cron line(s) for instance %s", removed, instance_id)
     return removed
 
 
@@ -109,11 +127,13 @@ def install_instance_one_shot(
     target = datetime.now() + timedelta(minutes=minutes_from_now)
     expr = f"{target.minute} {target.hour} {target.day} {target.month} *"
 
-    remove_instance_entries(instance_id)
-    lines = _read_crontab()
-    lines.append(instance_marker(instance_id))
-    lines.append(f"{expr} {cmd}")
-    _write_crontab(lines)
+    # Remove-then-append must happen under ONE lock acquisition (file_lock is not
+    # re-entrant) so a concurrent orchestrator can't interleave between them.
+    with file_lock(CRONTAB_LOCK):
+        kept, _ = _filter_instance_lines(_read_crontab(), instance_id)
+        kept.append(instance_marker(instance_id))
+        kept.append(f"{expr} {cmd}")
+        _write_crontab(kept)
     logger.info("Installed cron for %s: fires %s", instance_id, target.isoformat())
     return f"{expr} {cmd}"
 
@@ -167,12 +187,13 @@ def next_fire_at(instance_id: str) -> datetime | None:
 
 def remove_legacy_orchestrator_entries() -> int:
     """Remove the old flat-layout '# AGENT_ORCHESTRATOR' (trailing-marker) line."""
-    lines = _read_crontab()
-    kept = [ln for ln in lines if LEGACY_MARKER not in ln]
-    removed = len(lines) - len(kept)
-    if removed:
-        _write_crontab(kept)
-        logger.info("Removed %d legacy orchestrator cron line(s)", removed)
+    with file_lock(CRONTAB_LOCK):
+        lines = _read_crontab()
+        kept = [ln for ln in lines if LEGACY_MARKER not in ln]
+        removed = len(lines) - len(kept)
+        if removed:
+            _write_crontab(kept)
+            logger.info("Removed %d legacy orchestrator cron line(s)", removed)
     return removed
 
 

@@ -27,14 +27,18 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import lockfile
+
 AGENT_ROOT = Path(__file__).resolve().parent
 INSTANCES_DIR = AGENT_ROOT / "instances"
 REGISTRY_PATH = AGENT_ROOT / "registry.json"
+REGISTRY_LOCK = AGENT_ROOT / "registry.json.lock"
 # Shared HuggingFace cache for the embedding model — NOT per-instance.
 SHARED_HF_CACHE = AGENT_ROOT / "data" / "hf_cache"
 
@@ -47,6 +51,12 @@ DEFAULT_MODEL_V1 = "claude-opus-4-7"
 DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
 DEFAULT_MODEL_V3 = "claude-opus-4-8"
 DEFAULT_MODEL_V4 = "claude-opus-4-8"
+
+# Cross-vendor research-panel models (via OpenRouter). The default panel pairs
+# the Anthropic seat with these two other labs to avoid single-family agreement
+# inflation. Require OPENROUTER_API_KEY; absent it, these seats degrade.
+DEFAULT_RESEARCH_MISTRAL = "mistralai/mistral-large"
+DEFAULT_RESEARCH_GEMINI = "google/gemini-2.5-pro"
 
 
 def now_iso() -> str:
@@ -200,6 +210,61 @@ def default_config(
             "notes_channel": None,
             "mirror_channel": None,
             "chat_channel": None,
+            "advisory_channel": None,
+        },
+        # Post-session research panel (see research/). Runs only when the
+        # experiment has a formal spec block in experiments/<id>.md, so it
+        # no-ops cleanly until one is authored.
+        #
+        # DEFAULT = a cross-vendor panel (Anthropic + Mistral + Google), since
+        # single-model-family agreement is inflated. Each of the three roles, in
+        # all three sub-panels, is a different lab; the Anthropic seat/lens is
+        # listed FIRST because the chair runs on role[0] (kept on the most
+        # reliable JSON model). Requires OPENROUTER_API_KEY in .env — without it
+        # the non-Anthropic seats fail and the panel degrades to the Anthropic
+        # seat + chair (still functional, just single-family). max_tokens is 16k
+        # to give reasoning models (Gemini) headroom on the full coding scheme.
+        "research": {
+            "enabled": True,
+            "seats": [
+                {"seat_id": "behaviorist", "provider": "anthropic",
+                 "model": DEFAULT_MODEL_V2, "school": "behaviorist",
+                 "label": "Behaviorist (Claude)"},
+                {"seat_id": "phenomenological", "provider": "openrouter",
+                 "model": DEFAULT_RESEARCH_MISTRAL, "school": "phenomenological",
+                 "label": "Phenomenological-Cognitivist (Mistral)"},
+                {"seat_id": "skeptic_null", "provider": "openrouter",
+                 "model": DEFAULT_RESEARCH_GEMINI, "school": "skeptic_null",
+                 "label": "Skeptical Null-Hypothesis (Gemini)"},
+            ],
+            "max_tokens": 16000,
+            "budget_cap_usd": 3.0,
+            "debate_rounds": 1,
+            # Foundational priming docs (project root) injected into the panel's
+            # prompts so it grasps the program's motivating questions, not just
+            # the per-experiment spec. Loaded if present; falls back to this default.
+            "primers": ["primer_1_philosophy.md"],
+            # Rolling cumulative report (Phase 2): a living cross-session synthesis
+            # re-derived from the notes each time (anti-anchoring), via a panel of
+            # distinct lenses -> adversarial red-team -> chair, in plain language.
+            "cumulative_enabled": True,
+            "cumulative_budget_cap_usd": 3.0,
+            "cumulative_max_tokens": 8192,
+            "cumulative_min_notes": 2,
+            "emergent_promotion_min_sessions": 3,
+            "synthesizer_lenses": [
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "conservative_statistician"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_MISTRAL, "lens": "inductive_theorist"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_GEMINI, "lens": "falsificationist"},
+            ],
+            # Design-proposal review (put a proposed change to the panel).
+            "proposal_budget_cap_usd": 3.0,
+            "proposal_model": DEFAULT_MODEL_V2,
+            "proposal_lenses": [
+                {"provider": "anthropic", "model": DEFAULT_MODEL_V2, "lens": "internal_validity"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_MISTRAL, "lens": "construct_validity"},
+                {"provider": "openrouter", "model": DEFAULT_RESEARCH_GEMINI, "lens": "ethics_welfare"},
+            ],
         },
     }
     if version == "v2":
@@ -269,6 +334,25 @@ def save_registry(registry: dict) -> None:
     )
 
 
+@contextmanager
+def registry_txn():
+    """Atomic load-mutate-save of registry.json under a cross-process lock.
+
+    Use for EVERY registry mutation now that fork branches run concurrent
+    orchestrators: ``with registry_txn() as reg: reg[...] = ...``. The registry
+    is re-read fresh inside the lock and saved on clean exit, so two concurrent
+    ``last_wake`` writers (or a writer racing a ``fork``) can't clobber each
+    other. Pure reads (validation/inspection) can still use ``load_registry()``.
+
+    Lock ordering: this (the registry lock) is acquired BEFORE the crontab lock
+    whenever both are held; never the reverse.
+    """
+    with lockfile.file_lock(REGISTRY_LOCK):
+        reg = load_registry()
+        yield reg
+        save_registry(reg)
+
+
 def registry_entry(registry: dict, instance_id: str) -> dict | None:
     return registry.get("instances", {}).get(instance_id)
 
@@ -279,6 +363,22 @@ def active_instance_id(registry: dict | None = None) -> str | None:
         if ent.get("active"):
             return iid
     return None
+
+
+def active_instance_ids(registry: dict | None = None) -> list[str]:
+    """All active instance ids (≥1 once fork branches co-run), newest wake first.
+
+    Single-active is no longer an invariant: a fork-group's branches are
+    co-active. Callers that need a deterministic "the active one" (e.g. the
+    dashboard default) should take the first element (most-recently-woken).
+    """
+    reg = registry if registry is not None else load_registry()
+    actives = [
+        (iid, ent) for iid, ent in reg.get("instances", {}).items()
+        if ent.get("active")
+    ]
+    actives.sort(key=lambda kv: kv[1].get("last_wake") or "", reverse=True)
+    return [iid for iid, _ in actives]
 
 
 def list_instances(registry: dict | None = None, *, include_archived: bool = True) -> list[dict]:

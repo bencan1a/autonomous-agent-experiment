@@ -46,9 +46,8 @@ from communications.slack_client import SlackClient, format_episode_for_observer
 from instances_common import (
     Instance,
     SHARED_HF_CACHE,
-    load_registry,
     now_iso,
-    save_registry,
+    registry_txn,
 )
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
@@ -327,11 +326,10 @@ def run_v4_session(instance: Instance) -> int:
 
     # registry last_wake
     try:
-        reg = load_registry()
-        ent = reg.get("instances", {}).get(instance.id)
-        if ent is not None:
-            ent["last_wake"] = now_iso()
-            save_registry(reg)
+        with registry_txn() as reg:
+            ent = reg.get("instances", {}).get(instance.id)
+            if ent is not None:
+                ent["last_wake"] = now_iso()
     except Exception:
         log.exception("Failed to update registry last_wake; continuing")
 
@@ -612,6 +610,21 @@ def run_v4_session(instance: Instance) -> int:
         _budget_pause_and_notify(slack, episodic, instance_id=instance.id,
                                  reason="post-session budget cap reached")
         return 0
+
+    # Post-session research panel (inline, never blocks the next wake).
+    try:
+        from research.panel import run_research_panel
+        from research.store import ResearchStore
+
+        run_research_panel(
+            instance=instance, episodic=episodic,
+            research_store=ResearchStore(instance.episodes_db),
+            anthropic_client=client,
+            session_id=session_id, invocation_num=invocation_num,
+            semantic=semantic, agent_root=instance.root.parent.parent,
+        )
+    except Exception:
+        log.exception("Research panel failed; continuing to schedule next wake")
 
     try:
         cron_control.install_instance_one_shot(instance.id, minutes_from_now=int(sleep_min))

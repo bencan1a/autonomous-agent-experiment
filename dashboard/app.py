@@ -31,12 +31,16 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env", override=True)
 
 from memory.episodic import EpisodicStore  # noqa: E402
+from research.store import ResearchStore  # noqa: E402
 import cron_control  # noqa: E402
 import instance_control  # noqa: E402
 from instances_common import (  # noqa: E402
-    active_instance_id,
+    active_instance_ids,
     list_instances,
     load_instance,
+    registry_entry,
+    registry_txn,
+    save_config,
 )
 from system_prompt import SYSTEM_PROMPT  # noqa: E402
 from agent_tools.registry import TOOLS_SPEC  # noqa: E402
@@ -124,7 +128,8 @@ def _resolve_instance():
 
     Preference order:
       1. ?instance=<id> if it names a loadable instance
-      2. the registry's active instance
+      2. the most-recently-woken active instance (fork branches can co-run, so
+         there may be several active; pick deterministically by last_wake)
       3. the first instance from list_instances()
     Returns an Instance or None (zero instances / all unloadable).
     """
@@ -135,10 +140,7 @@ def _resolve_instance():
     candidates: list[str] = []
     if requested and requested in valid_ids:
         candidates.append(requested)
-    active = active_instance_id()
-    if active and active in valid_ids:
-        candidates.append(active)
-    candidates.extend(i["id"] for i in instances)
+    candidates.extend(iid for iid in active_instance_ids() if iid in valid_ids)
 
     for iid in candidates:
         try:
@@ -181,16 +183,27 @@ def _inject_instance_context():
     if inst is not None:
         # Find the registry entry for richer status/active fields.
         entry = next((i for i in instances if i["id"] == inst.id), None)
+        branch_label = (entry or {}).get("branch_label") or inst.config.get("branch_label")
         selected = {
             "id": inst.id,
             "name": inst.name,
             "version": inst.version,
             "status": (entry or {}).get("status"),
             "active": (entry or {}).get("active", False),
+            # lineage (None for non-forked instances)
+            "branch_label": branch_label,
+            "parent_id": (entry or {}).get("parent_id") or inst.config.get("parent_id"),
+            "fork_group": (entry or {}).get("fork_group") or inst.config.get("fork_group"),
+            "cycle_label": None,
         }
         try:
             store = EpisodicStore(inst.episodes_db)
             cost_total = sum(float(r["cost_usd"]) for r in store.cost_by_day())
+            # cycle label e.g. "8a": the cycle this branch is on (its next
+            # invocation number) + branch letter — matches the fork naming, and
+            # advances 8a -> 9a -> ... as the branch runs.
+            if branch_label:
+                selected["cycle_label"] = f"{store.next_invocation_num()}{branch_label}"
         except Exception:
             cost_total = 0.0
     return {
@@ -660,6 +673,49 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     return {"events": events, "invocations": invocations, "selected": selected}
 
 
+def _invocation_to_session(store: EpisodicStore) -> dict[int, int]:
+    """Map invocation_num -> its (earliest) session id."""
+    out: dict[int, int] = {}
+    for s in store.all_sessions():  # ascending by id
+        inv = s.get("invocation_num")
+        if inv is not None and inv not in out:
+            out[inv] = s["id"]
+    return out
+
+
+def _research_context(store: EpisodicStore, selected):
+    """Resolve which research notes to show on the overview, mirroring the timeline.
+
+    Returns (notes, show_all, invocation, total). When the timeline selector is
+    'all', every note is returned (newest first); for a specific invocation just
+    that one note is returned (single-item list). Each note gets a 'fleiss' key.
+    """
+    try:
+        rs = ResearchStore(g.instance.episodes_db)
+    except Exception:
+        return [], False, None, 0
+    all_notes = rs.recent_notes(n=100000)  # newest first
+    total = len(all_notes)
+
+    def _attach(n):
+        kap = rs.kappa_for_session(n["session_id"])
+        n["fleiss"] = next((k["value"] for k in kap if k.get("metric") == "fleiss"), None)
+        return n
+
+    if selected == "all":
+        return [_attach(n) for n in all_notes], True, None, total
+
+    note = None
+    inv = None
+    if isinstance(selected, int):
+        sid = _invocation_to_session(store).get(selected)
+        if sid is not None:
+            note = rs.note_for_session(sid)
+            inv = selected
+    notes = [_attach(note)] if note else []
+    return notes, False, inv, total
+
+
 def _dashboard_context() -> dict:
     store = _store()
     episodes = store.all_episodes()
@@ -989,6 +1045,10 @@ def _dashboard_context() -> dict:
         _tl_parsed = None
     timeline = _build_invocation_timeline(store, invocation=_tl_parsed)
 
+    # Research notes mirroring the timeline selector ('all' -> every note).
+    research_notes, research_show_all, research_invocation, research_notes_count = \
+        _research_context(store, timeline["selected"])
+
     return {
         "recent_files": recent_files,
         "next_fire_iso": next_fire_iso,
@@ -1036,6 +1096,10 @@ def _dashboard_context() -> dict:
         "timeline_events": timeline["events"],
         "timeline_invocations": timeline["invocations"],
         "timeline_selected": timeline["selected"],
+        "research_notes": research_notes,
+        "research_show_all": research_show_all,
+        "research_invocation": research_invocation,
+        "research_notes_count": research_notes_count,
         "now": datetime.now(UTC).isoformat(),
     }
 
@@ -1048,6 +1112,39 @@ def index():
 @app.route("/logs")
 def logs():
     return render_template("logs.html", **_dashboard_context())
+
+
+@app.route("/research")
+def research_view():
+    store = _store()
+    rs = ResearchStore(g.instance.episodes_db)
+    notes = rs.recent_notes(n=200)
+    # Attach the per-session Fleiss kappa to each note for the list view.
+    for n in notes:
+        kap = rs.kappa_for_session(n["session_id"])
+        n["fleiss"] = next((k["value"] for k in kap if k.get("metric") == "fleiss"), None)
+
+    # The operationalized coding scheme + approval status for this experiment.
+    from research.spec import load_spec
+
+    spec = load_spec(ROOT, g.instance.id)
+    prereg = None
+    if spec is not None:
+        prereg = rs.get_prereg(g.instance.id, spec.spec_hash) or rs.latest_prereg(g.instance.id)
+    else:
+        prereg = rs.latest_prereg(g.instance.id)
+
+    cumulative = rs.latest_cumulative(g.instance.id)
+
+    return render_template(
+        "research.html",
+        status=_status(),
+        notes=notes,
+        spec=spec,
+        prereg=prereg,
+        cumulative=cumulative,
+        now=datetime.now(UTC).isoformat(),
+    )
 
 
 # =========================================================================== #
@@ -1081,6 +1178,23 @@ def resume():
         return redirect(url_for("index", instance=iid, control="badpass"))
 
     prior = instance_control.clear_paused(iid)
+
+    # Restore registry + config status to "active" (pause set it to "paused").
+    try:
+        with registry_txn() as reg:
+            ent = registry_entry(reg, iid)
+            if ent is not None:
+                ent["status"] = "active"
+                ent["active"] = True
+        try:
+            inst = load_instance(iid)
+            inst.config["status"] = "active"
+            save_config(iid, inst.config)
+        except Exception:
+            app.logger.exception("resume: failed to sync status to config.json (non-fatal)")
+    except Exception:
+        app.logger.exception("resume: failed to update registry status (non-fatal)")
+
     now = datetime.now(UTC)
     paused_at = _parse_iso(prior.get("paused_at"))
     if paused_at is not None:
@@ -1215,6 +1329,18 @@ def session_detail(session_id: int):
     # Wall-clock duration (live = now)
     duration = _duration_str(session.get("started_at"), session.get("ended_at"))
 
+    # Research panel artifacts (if a panel reviewed this session).
+    research_note = None
+    research_seats: list = []
+    research_kappa: list = []
+    try:
+        rs = ResearchStore(g.instance.episodes_db)
+        research_note = rs.note_for_session(session_id)
+        research_seats = rs.seat_notes_for_session(session_id)
+        research_kappa = rs.kappa_for_session(session_id)
+    except Exception:
+        pass
+
     return render_template(
         "session.html",
         status=_status(),
@@ -1225,6 +1351,9 @@ def session_detail(session_id: int):
         is_live=live,
         session_cost=round(session_cost, 4),
         duration=duration,
+        research_note=research_note,
+        research_seats=research_seats,
+        research_kappa=research_kappa,
         now=datetime.now(UTC).isoformat(),
     )
 
@@ -2191,6 +2320,76 @@ def api_file(instance_id: str, relpath: str):
     return Response(data, content_type="text/plain; charset=utf-8")
 
 
+@app.route("/api/instance/<instance_id>/session/<int:session_id>/research")
+def api_session_research(instance_id: str, session_id: int):
+    inst, err = _load_instance_or_404(instance_id)
+    if err:
+        return err
+    rs = ResearchStore(inst.episodes_db)
+    note = rs.note_for_session(session_id)
+    if note is None and not rs.seat_notes_for_session(session_id):
+        return _api_error(f"no research note for session {session_id}", 404)
+    return jsonify(
+        {
+            "note": note,
+            "seat_notes": rs.seat_notes_for_session(session_id),
+            "kappa": rs.kappa_for_session(session_id),
+        }
+    )
+
+
+@app.route("/api/instance/<instance_id>/prereg")
+def api_prereg(instance_id: str):
+    inst, err = _load_instance_or_404(instance_id)
+    if err:
+        return err
+    from research.spec import load_spec
+
+    spec = load_spec(ROOT, instance_id)
+    rs = ResearchStore(inst.episodes_db)
+    prereg = None
+    if spec is not None:
+        prereg = rs.get_prereg(instance_id, spec.spec_hash)
+    if prereg is None:
+        prereg = rs.latest_prereg(instance_id)
+    return jsonify({"spec": spec.to_dict() if spec else None, "prereg": prereg})
+
+
+@app.route("/api/instance/<instance_id>/prereg/approve", methods=["POST"])
+def api_prereg_approve(instance_id: str):
+    inst, err = _load_instance_or_404(instance_id)
+    if err:
+        return err
+    from research.spec import load_spec
+
+    spec = load_spec(ROOT, instance_id)
+    rs = ResearchStore(inst.episodes_db)
+    spec_hash = spec.spec_hash if spec else None
+    if spec_hash is None:
+        latest = rs.latest_prereg(instance_id)
+        spec_hash = latest.get("spec_hash") if latest else None
+    ok = rs.approve_prereg(instance_id, spec_hash)
+    if not ok:
+        return _api_error("no coding scheme to approve yet", 404)
+    return jsonify({"status": "approved", "experiment_id": instance_id, "spec_hash": spec_hash})
+
+
+@app.route("/api/instance/<instance_id>/synthesis")
+def api_synthesis(instance_id: str):
+    inst, err = _load_instance_or_404(instance_id)
+    if err:
+        return err
+    rs = ResearchStore(inst.episodes_db)
+    version = request.args.get("version")
+    if version and version.isdigit():
+        rep = rs.cumulative_version(instance_id, int(version))
+    else:
+        rep = rs.latest_cumulative(instance_id)
+    if rep is None:
+        return _api_error(f"no cumulative report for '{instance_id}'", 404)
+    return jsonify({"report": rep, "versions": rs.cumulative_versions(instance_id)})
+
+
 def _api_endpoints(base: str) -> list[dict]:
     return [
         {
@@ -2218,6 +2417,26 @@ def _api_endpoints(base: str) -> list[dict]:
             "method": "GET", "path": "/api/instance/<id>/file/<path>",
             "description": "Raw current content of a workspace document. Doc links in bundles point here.",
             "params": {}, "example": f"{base}/api/instance/v2-environmental/file/CLAUDE.md",
+        },
+        {
+            "method": "GET", "path": "/api/instance/<id>/session/<session_id>/research",
+            "description": "Research panel output for one session: synthesized note (raw_observations/inferences/analysis/promoted_claims/disagreements), per-seat notes, and inter-rater kappa.",
+            "params": {}, "example": f"{base}/api/instance/v4-continuous/session/1/research",
+        },
+        {
+            "method": "GET", "path": "/api/instance/<id>/prereg",
+            "description": "The formal experiment spec + the panel's operationalized coding scheme and its approval status (pending_approval|approved).",
+            "params": {}, "example": f"{base}/api/instance/v4-continuous/prereg",
+        },
+        {
+            "method": "POST", "path": "/api/instance/<id>/prereg/approve",
+            "description": "Approve the operationalized coding scheme (the human gate); new per-session notes become 'binding'.",
+            "params": {}, "example": f"{base}/api/instance/v4-continuous/prereg/approve",
+        },
+        {
+            "method": "GET", "path": "/api/instance/<id>/synthesis",
+            "description": "The rolling cumulative report: per-hypothesis verdicts + certainty (plain language), emergent hypotheses, recommendations, drift/changelog, and the deterministic evidence matrix. Latest by default; ?version=N for a specific version.",
+            "params": {"version": "N (optional; default latest)"}, "example": f"{base}/api/instance/v4-continuous/synthesis",
         },
     ]
 

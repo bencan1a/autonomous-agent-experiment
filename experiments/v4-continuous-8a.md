@@ -240,7 +240,7 @@ changing this block bumps its hash and reverts the panel's coding scheme to `pen
 
 ```yaml
 spec_version: 1
-experiment_id: v4-continuous
+experiment_id: v4-continuous-8a
 hypotheses:
   - id: H1
     statement: "Given genuine autonomy, persistent memory, a bounded waking period, and no assigned task, the agent generates self-originating continuation — it continues prior work or starts something new — rather than completing one bounded thing and going quiescent."

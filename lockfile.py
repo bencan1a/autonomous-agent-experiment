@@ -7,8 +7,59 @@ treated as releasable. A live orchestrator PID blocks acquisition.
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import os
+import time
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def file_lock(path: str | Path, *, timeout: float = 30.0, poll: float = 0.1):
+    """Cross-process advisory exclusive lock via ``fcntl.flock``.
+
+    Blocks until the lock is acquired or ``timeout`` seconds elapse (then raises
+    ``TimeoutError``). The lock is tied to the open file description, so it
+    auto-releases on context exit *and* on process death — a crashed holder
+    never leaves a stale lock (unlike the PID-based orchestrator lock above).
+
+    Used to serialize read-modify-write on shared mutable files (the crontab and
+    ``registry.json``) now that fork branches run multiple orchestrators at once.
+
+    NOT re-entrant: a second ``file_lock`` on the same path *in the same process*
+    opens a distinct fd and will block (the flock is per open-file-description).
+    Structure callers so one lock acquisition spans the whole read-modify-write.
+
+    Lock ordering: when more than one ``file_lock`` is held at once, always
+    acquire the registry lock BEFORE the crontab lock to avoid deadlock.
+
+    ``fcntl.flock`` is reliable on local filesystems but NOT over NFS; the agent
+    root is local on this host.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(p), os.O_RDWR | os.O_CREAT, 0o644)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"could not acquire lock {p} within {timeout}s"
+                    )
+                time.sleep(poll)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def read_pid(path: str | Path) -> int | None:

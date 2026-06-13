@@ -1,0 +1,175 @@
+{% extends "_base.html" %}
+
+{% block title %}Research — dashboard{% endblock %}
+
+{% block header_meta %}
+  &nbsp; research
+{% endblock %}
+
+{% block main %}
+  {# ---------------- Rolling cumulative synthesis report ---------------- #}
+  {% if cumulative and cumulative.report %}
+    {% set r = cumulative.report %}
+    {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
+    <section class="wide">
+      <h2>Synthesis report
+        <span class="small">(v{{ cumulative.version }} · as of {{ cumulative.up_to_session_count }} sessions · {{ cumulative.created_at|relative_time }})</span>
+        {% if cumulative.degraded %}<span class="pill bad">degraded</span>{% endif %}
+        {% if cumulative.drift_flagged %}<span class="pill bad" title="A verdict/certainty changed without new sessions backing it.">drift flagged</span>{% endif %}
+      </h2>
+
+      {% if r.executive_summary %}<p class="focus">{{ r.executive_summary|replace('\n\n', '</p><p class="focus">')|safe }}</p>{% endif %}
+
+      {% for h in r.hypotheses %}
+        <div class="card" style="margin:8px 0; padding:10px; border:1px solid var(--border,#333); border-radius:6px;">
+          <div>
+            <strong>{{ h.id }}</strong>
+            {% if h.verdict == 'supported' %}<span class="pill ok">supported</span>
+            {% elif h.verdict == 'refuted' %}<span class="pill warn">refuted</span>
+            {% elif h.verdict == 'mixed' %}<span class="pill muted">mixed</span>
+            {% else %}<span class="pill muted">insufficient</span>{% endif %}
+            {% if h.certainty %}
+              {% if h.certainty == 'high' %}<span class="pill ok">certainty: high</span>
+              {% elif h.certainty == 'moderate' %}<span class="pill">certainty: moderate</span>
+              {% else %}<span class="pill muted">certainty: {{ h.certainty }}</span>{% endif %}
+            {% endif %}
+          </div>
+          {% if spec %}
+            {% for sh in spec.hypotheses if sh.id == h.id %}
+              <blockquote class="small" style="margin:6px 0; padding:4px 0 4px 10px; border-left:3px solid var(--border,#333);">
+                <span class="ts">original hypothesis:</span> {{ sh.statement }}
+              </blockquote>
+            {% endfor %}
+          {% endif %}
+          {% if h.plain_finding %}<p style="margin:6px 0;">{{ h.plain_finding }}</p>{% endif %}
+          {% if h.certainty_reasons %}<div class="small ts">why this certainty: {{ h.certainty_reasons|join('; ') }}</div>{% endif %}
+          <div class="small">
+            {% if h.supporting_sessions %}supporting sessions: {{ h.supporting_sessions|join(', ') }}{% endif %}
+            {% if h.trend %} · trend: {{ h.trend }}{% endif %}
+          </div>
+          {% if h.disconfirming %}<div class="small"><span class="ts">disconfirming:</span> {{ h.disconfirming }}</div>{% endif %}
+        </div>
+      {% endfor %}
+
+      {% if r.emergent_hypotheses %}
+        <h3>Emergent (exploratory) hypotheses</h3>
+        <ul>
+        {% for e in r.emergent_hypotheses %}
+          <li><strong>{{ e.label }}</strong>
+            <span class="pill muted">{{ e.status or 'candidate' }}</span>
+            {% if e.first_proposed_at_session %}<span class="ts">first seen #{{ e.first_proposed_at_session }}</span>{% endif %}
+            <div>{{ e.plain_description }}</div>
+            {% if e.promotion_threshold %}<div class="small ts">to promote: {{ e.promotion_threshold }}</div>{% endif %}
+          </li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if r.recommendations %}
+        <h3>Recommendations <span class="small">(advice — not auto-applied)</span></h3>
+        <ul>
+        {% for rec in r.recommendations %}
+          <li>{{ rec.recommendation }}{% if rec.rationale %}<div class="small ts">why: {{ rec.rationale }}</div>{% endif %}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if r.changelog %}
+        <details style="margin-top:6px;">
+          <summary class="small">changelog vs previous version ({{ r.changelog|length }})</summary>
+          <ul>{% for c in r.changelog %}
+            <li>{% if c.hypothesis %}<strong>{{ c.hypothesis }}</strong>: {{ c.from.verdict }}/{{ c.from.certainty }} → {{ c.to.verdict }}/{{ c.to.certainty }} — {% endif %}{{ c.note }}</li>
+          {% endfor %}</ul>
+        </details>
+      {% endif %}
+
+      {% if r.caveats %}
+        <div class="small ts" style="margin-top:6px;">caveats: {{ r.caveats|join(' · ') }}</div>
+      {% endif %}
+      {% if r.glossary %}
+        <details><summary class="small">glossary</summary>
+          <ul>{% for g in r.glossary %}<li><strong>{{ g.term }}</strong>: {{ g.plain_definition }}</li>{% endfor %}</ul>
+        </details>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {# ---------------- Coding scheme + approval status ---------------- #}
+  <section class="wide">
+    <h2>Coding scheme
+      {% if prereg and prereg.status == 'approved' %}
+        <span class="pill ok">approved</span>
+      {% elif prereg %}
+        <span class="pill warn">pending approval</span>
+      {% else %}
+        <span class="pill muted">none yet</span>
+      {% endif %}
+    </h2>
+    {% if not spec %}
+      <div class="empty">
+        No formal specification block in <code>experiments/{{ selected_instance.id if selected_instance else '&lt;id&gt;' }}.md</code>.
+        The research panel no-ops until one is authored (add a <code>## Specification (formal)</code> yaml block).
+      </div>
+    {% elif not prereg %}
+      <div class="empty">
+        The spec is present ({{ spec.hypotheses|length }} hypotheses) but no coding scheme has been
+        operationalized yet — it is created the first time the panel reviews a session.
+      </div>
+    {% else %}
+      <p class="small">
+        Operationalized from the formal spec ({{ spec.hypotheses|length if spec else '?' }} hypotheses).
+        Notes are marked <strong>binding</strong> once the scheme is approved, else <strong>provisional</strong>.
+        {% if prereg.status != 'approved' %}
+          Approve with:
+          <code>./venv/bin/python instance_manager.py research approve {{ selected_instance.id if selected_instance else '&lt;id&gt;' }}</code>
+        {% endif %}
+      </p>
+      <table>
+        <thead><tr><th style="width:200px">code</th><th style="width:60px">H</th><th>operational definition</th></tr></thead>
+        <tbody>
+        {% for c in prereg.code_vocab or [] %}
+          <tr>
+            <td><code>{{ c.code }}</code></td>
+            <td>{% if c.maps_to_hypothesis %}<span class="pill muted">{{ c.maps_to_hypothesis }}</span>{% endif %}</td>
+            <td class="small">{{ c.definition }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  {# ---------------- Per-invocation research notes ---------------- #}
+  <section class="wide">
+    <h2>Research notes <span class="small">({{ notes|length }})</span></h2>
+    {% if not notes %}
+      <div class="empty">No research notes yet. They are written by the panel at the end of each session.</div>
+    {% else %}
+      {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
+      {% for n in notes %}
+        <div class="card" style="margin-bottom:10px; padding:10px; border:1px solid var(--border, #333); border-radius:6px;">
+          <div>
+            <strong>Invocation #{{ n.invocation_num }}</strong>
+            {% if n.coding_status == 'binding' %}<span class="pill ok">binding</span>
+            {% else %}<span class="pill muted">provisional</span>{% endif %}
+            {% if n.degraded %}<span class="pill bad">degraded</span>{% endif %}
+            {% if n.fleiss is not none %}<span class="small">· Fleiss κ {{ '%.2f'|format(n.fleiss) }}</span>{% endif %}
+            <span class="ts">· {{ n.created_at|relative_time }} · ${{ '%.4f'|format(n.total_cost_usd or 0) }}</span>
+          </div>
+          {% if n.note and n.note.summary %}<p class="focus" style="margin:6px 0;">{{ n.note.summary }}</p>{% endif %}
+          {% if n.note and n.note.promoted_claims %}
+            <div class="small ts">promoted claims:</div>
+            <ul style="margin-top:2px;">
+            {% for c in n.note.promoted_claims[:4] %}
+              <li>{{ c.claim }}{% if c.hypothesis %} <span class="pill muted">{{ c.hypothesis }}</span>{% endif %}</li>
+            {% endfor %}
+            </ul>
+          {% endif %}
+          <div class="small">
+            <a href="{{ url_for('session_detail', session_id=n.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a>
+          </div>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </section>
+{% endblock %}

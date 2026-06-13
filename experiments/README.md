@@ -38,4 +38,27 @@ When we pause/assess or end.
 
 ## Observations
 Running notes on what actually happened.
+
+## Specification (formal)
+The machine-readable baseline the research panel validates against (parsed by
+`research/spec.py`). One fenced ```yaml block; the panel never authors these claims, it only
+operationalizes a coding scheme from them and the operator approves it once. Editing this
+block bumps its hash and reverts the panel's coding scheme to `pending_approval`.
+
+    ```yaml
+    spec_version: 1
+    experiment_id: <instance_id>
+    hypotheses:
+      - id: H1
+        statement: "<the claim>"
+        predicted_evidence: "<what would confirm it>"
+        falsifying_evidence: "<what would refute it>"   # required — forces falsifiability
+    independent_variables: ["<what this condition changes vs baseline>"]
+    dependent_variables:   ["<what we observe>"]
+    controls_held_constant: ["<deliberately not the variable>"]
+    success_criteria:      ["<acceptance, drawn from the doc>"]
+    stopping_conditions:   ["<when to pause/assess/end; ethics included>"]
+    candidate_behavior_codes:        # optional seeds; panel operationalizes + you approve
+      - {code: "<short_code>", definition: "<operational, falsifiable definition>"}
+    ```
 ```

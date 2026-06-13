@@ -63,10 +63,9 @@ from instances_common import (  # noqa: E402
     Instance,
     SHARED_HF_CACHE,
     load_instance,
-    load_registry,
     now_iso,
     registry_entry,
-    save_registry,
+    registry_txn,
 )
 import lockfile  # noqa: E402
 from maintenance import run_weekly_compression  # noqa: E402
@@ -506,11 +505,10 @@ def run_v1_session(instance: Instance) -> int:
 
     # Record this wake in the registry (best-effort).
     try:
-        reg = load_registry()
-        ent = registry_entry(reg, instance.id)
-        if ent is not None:
-            ent["last_wake"] = now_iso()
-            save_registry(reg)
+        with registry_txn() as reg:
+            ent = registry_entry(reg, instance.id)
+            if ent is not None:
+                ent["last_wake"] = now_iso()
     except Exception:
         log.exception("Failed to update registry last_wake; continuing")
 
@@ -796,6 +794,21 @@ def run_v1_session(instance: Instance) -> int:
             slack, episodic, instance_id=instance.id, reason=" and ".join(reason)
         )
         return 0
+
+    # Post-session research panel (inline, never blocks the next wake).
+    try:
+        from research.panel import run_research_panel
+        from research.store import ResearchStore
+
+        run_research_panel(
+            instance=instance, episodic=episodic,
+            research_store=ResearchStore(instance.episodes_db),
+            anthropic_client=anthropic_client,
+            session_id=session_id, invocation_num=invocation_num,
+            semantic=semantic, agent_root=AGENT_ROOT,
+        )
+    except Exception:
+        log.exception("Research panel failed; continuing to schedule next wake")
 
     # Step 7 — schedule next invocation.
     if next_invoke_minutes is None:
