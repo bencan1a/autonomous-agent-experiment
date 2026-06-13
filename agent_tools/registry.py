@@ -124,8 +124,8 @@ TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "read_claude_md",
-        "description": "Read the CLAUDE.md notes-to-self file. Returns {exists, content, size}. This file is auto-prepended to your context next invocation.",
+        "name": "read_agents_md",
+        "description": "Read the AGENTS.md notes-to-self file. Returns {exists, content, size}. This file is auto-prepended to your context next invocation.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -133,12 +133,12 @@ TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "write_claude_md",
-        "description": "Overwrite the CLAUDE.md notes-to-self file. Changes are tracked in a history table. The new contents will appear at the top of your context on the next invocation.",
+        "name": "write_agents_md",
+        "description": "Overwrite the AGENTS.md notes-to-self file. Changes are tracked in a history table. The new contents will appear at the top of your context on the next invocation.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "Full new contents of CLAUDE.md."},
+                "content": {"type": "string", "description": "Full new contents of AGENTS.md."},
             },
             "required": ["content"],
         },
@@ -230,8 +230,8 @@ _HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
     "delete_file": files.delete_file,
     "query_episodic_memory": memory.query_episodic_memory,
     "recent_episodes": memory.recent_episodes,
-    "read_claude_md": claude_md.read_claude_md,
-    "write_claude_md": claude_md.write_claude_md,
+    "read_agents_md": claude_md.read_agents_md,
+    "write_agents_md": claude_md.write_agents_md,
     "spawn_subagent": subagent.spawn_subagent,
     "post_to_agent_channel": comms.post_to_agent_channel,
     "dm_ben": comms.dm_ben,
@@ -256,7 +256,7 @@ _HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
 
 _V2_KEEP = {
     "web_search", "fetch_url", "read_file", "write_file", "list_directory", "delete_file",
-    "query_episodic_memory", "recent_episodes", "read_claude_md", "write_claude_md",
+    "query_episodic_memory", "recent_episodes", "read_agents_md", "write_agents_md",
     "spawn_subagent",
 }
 

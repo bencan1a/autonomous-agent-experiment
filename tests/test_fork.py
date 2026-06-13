@@ -108,7 +108,7 @@ def _seed_parent(tmp: Path) -> dict:
     ic.save_config(PARENT, cfg)
 
     # workspace handoff
-    (inst.workspace_dir / "CLAUDE.md").write_text("# handoff\nthread: alpha\n", encoding="utf-8")
+    (inst.workspace_dir / "AGENTS.md").write_text("# handoff\nthread: alpha\n", encoding="utf-8")
 
     # episodes 1..7 + meta + cost
     ep = EpisodicStore(inst.episodes_db)
@@ -203,7 +203,7 @@ def scenario_fork_transparency_and_lineage():
                 # budget spent-to-date carries over (caps continue, not reset)
                 assert abs(cep.cost_today() - ref["cost_today"]) < 1e-9, cid
                 # workspace handoff copied
-                assert (cinst.workspace_dir / "CLAUDE.md").exists(), cid
+                assert (cinst.workspace_dir / "AGENTS.md").exists(), cid
 
             # research id rewrite on child 8a
             cdb = ic.load_instance("v4-continuous-8a").episodes_db

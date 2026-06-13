@@ -191,6 +191,7 @@ def _run(
     # 2. Evidence bundle (pure, once) + foundational program context.
     evidence = build_session_evidence(episodic, session_id, invocation_num)
     program_context = _load_program_context(agent_root, cfg)
+    agent_model: str | None = getattr(instance, "model", None)
 
     # Idempotency: drop any prior seat notes / kappa for this session so a
     # re-run (e.g. backfill) replaces rather than duplicates them.
@@ -211,7 +212,7 @@ def _run(
             provider = provider_for(seat.provider)
             resp = provider.complete(
                 system=build_seat_system(seat),
-                prompt=build_seat_prompt(spec, code_vocab, evidence, program_context),
+                prompt=build_seat_prompt(spec, code_vocab, evidence, program_context, agent_model=agent_model),
                 model=seat.model,
                 max_tokens=max_tokens,
             )
@@ -279,6 +280,7 @@ def _run(
         synth_note, synth_err, synth_raw = _synthesize(
             provider_for(seats[0].provider), seats[0].model, max_tokens, debate_rounds,
             spec, code_vocab, successful, kappa, evidence, account, program_context,
+            agent_model=agent_model,
         )
     if synth_note is None:
         degraded = True
@@ -329,7 +331,7 @@ def _run(
 
 
 def _synthesize(provider, model, max_tokens, debate_rounds, spec, code_vocab,
-                successful, kappa, evidence, account, program_context=""):
+                successful, kappa, evidence, account, program_context="", agent_model=None):
     """Run the chair synthesis (with optional extra debate rounds).
 
     The chair consolidates every seat note, so it needs more output headroom than
@@ -340,7 +342,7 @@ def _synthesize(provider, model, max_tokens, debate_rounds, spec, code_vocab,
     note: dict[str, Any] | None = None
     err: str | None = None
     last_raw: str | None = None
-    base_prompt = build_chair_prompt(spec, code_vocab, successful, kappa, evidence, program_context)
+    base_prompt = build_chair_prompt(spec, code_vocab, successful, kappa, evidence, program_context, agent_model=agent_model)
     for r in range(debate_rounds):
         prompt = base_prompt
         if r > 0 and note is not None:

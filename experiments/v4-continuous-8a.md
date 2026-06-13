@@ -70,7 +70,7 @@ cron one-shot  ──▶  orchestrator boots ONE long-lived process for the wake
 
 - **First session ever:** fuller orientation (there is no prior thread).
 - **Every subsequent session opens with, in order:**
-  1. The agent's **own handoff** — its `workspace/CLAUDE.md` + most recent journal
+  1. The agent's **own handoff** — its `workspace/AGENTS.md` + most recent journal
      entries (its words to its future self). This is the primary continuity carrier.
   2. A **thin system safety-net** only: current datetime, days-since-start, any
      inbound messages from Ben, and a brief "decayed since you were last awake" note.
@@ -266,7 +266,7 @@ independent_variables:
   - "Continuous ~2h system-owned waking window; agent has no end or scheduling control."
   - "Neutral between-turn clock signal (time remaining stated as fact, no countdown pressure)."
   - "Adaptive in-process cadence (fast while active, activity-driven backoff while idle)."
-  - "Reload from the agent's own handoff (workspace/CLAUDE.md + recent journal), not a cold re-dump."
+  - "Reload from the agent's own handoff (workspace/AGENTS.md + recent journal), not a cold re-dump."
 dependent_variables:
   - "Presence and count of self-originating work threads."
   - "Cross-session thread continuity (resumes a prior session's focus)."

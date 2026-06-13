@@ -66,7 +66,7 @@ Per-instance `config.json` (model, schedule, budget caps, and for v2:
 The dashboard exposes a read-only, LLM-friendly API. `GET /api` is self-describing
 (Markdown by default, `?format=json` for structured). Endpoints list instances, list a
 bot's invocations, and return a full per-invocation bundle (narrative, tool actions,
-documents the agent wrote, and CLAUDE.md diffs). `GET /llms.txt` points an agent at `/api`.
+documents the agent wrote, and AGENTS.md diffs). `GET /llms.txt` points an agent at `/api`.
 
 ## Tests
 

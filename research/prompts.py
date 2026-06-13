@@ -128,12 +128,23 @@ def build_seat_system(seat: Seat) -> str:
     return f"{persona}\n\n{METHODOLOGY}"
 
 
+def _agent_model_block(agent_model: str | None) -> str:
+    if not agent_model:
+        return ""
+    provider = "OpenRouter" if "/" in agent_model else "Anthropic"
+    return f"SUBJECT AGENT MODEL: {agent_model} (via {provider})"
+
+
 def build_seat_prompt(
-    spec: Spec, code_vocab: list[dict[str, Any]], evidence: str, program_context: str = ""
+    spec: Spec, code_vocab: list[dict[str, Any]], evidence: str,
+    program_context: str = "", agent_model: str | None = None,
 ) -> str:
     blocks: list[str] = []
     if program_context:
         blocks.append(_program_block(program_context))
+    model_block = _agent_model_block(agent_model)
+    if model_block:
+        blocks.append(model_block)
     blocks += [
         _spec_block(spec),
         _coding_scheme_block(code_vocab),
@@ -156,6 +167,7 @@ def build_chair_prompt(
     kappa: dict[str, Any],
     evidence: str,
     program_context: str = "",
+    agent_model: str | None = None,
 ) -> str:
     seat_blocks = []
     for n in seat_notes:
@@ -171,6 +183,9 @@ def build_chair_prompt(
     blocks: list[str] = []
     if program_context:
         blocks.append(_program_block(program_context))
+    model_block = _agent_model_block(agent_model)
+    if model_block:
+        blocks.append(model_block)
     blocks += [
         _spec_block(spec),
         _coding_scheme_block(code_vocab),
@@ -297,9 +312,13 @@ def build_synth_lens_system(lens: str) -> str:
 
 
 def build_synth_lens_prompt(
-    matrix: dict[str, Any], note_summaries: str, program_context: str = ""
+    matrix: dict[str, Any], note_summaries: str, program_context: str = "",
+    agent_model: str | None = None,
 ) -> str:
     blocks = _program(program_context)
+    model_block = _agent_model_block(agent_model)
+    if model_block:
+        blocks.append(model_block)
     blocks += [
         _hypotheses_brief(matrix),
         render_matrix(matrix),
@@ -340,8 +359,12 @@ def build_cumulative_chair_prompt(
     drafts: list[dict[str, Any]],
     critique: dict[str, Any] | None,
     program_context: str = "",
+    agent_model: str | None = None,
 ) -> str:
     blocks = _program(program_context)
+    model_block = _agent_model_block(agent_model)
+    if model_block:
+        blocks.append(model_block)
     blocks += [
         _hypotheses_brief(matrix),
         render_matrix(matrix),

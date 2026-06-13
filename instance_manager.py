@@ -476,6 +476,165 @@ def _fork_slack(parent: Instance, child_id: str, *, private: bool, include_mirro
 
 
 # --------------------------------------------------------------------------- #
+# clone: a fresh-start instance carrying another's config on a different model
+# --------------------------------------------------------------------------- #
+
+def _rollback_instance(child_id: str, channels: dict | None = None) -> None:
+    """Undo a partial ``create_cloned_instance``: archive any provisioned channels,
+    delete the instance dir, drop the registry entry. Best-effort; never raises
+    (so it is safe to call from an ``except`` block)."""
+    if channels:
+        ids = [
+            channels.get(k) for k in
+            ("notes_channel", "mirror_channel", "chat_channel", "advisory_channel")
+        ]
+        ids = [c for c in ids if c]
+        if ids:
+            try:
+                from communications.slack_provisioning import archive_instance_channels
+
+                token, _ = _slack_creds()
+                archive_instance_channels(bot_token=token, channel_ids=ids)
+            except Exception:
+                print(f"warning: rollback could not archive Slack channels for "
+                      f"'{child_id}'", file=sys.stderr)
+    try:
+        shutil.rmtree(instance_dir(child_id), ignore_errors=True)
+    except Exception:
+        pass
+    try:
+        with registry_txn() as reg:
+            reg.get("instances", {}).pop(child_id, None)
+    except Exception:
+        print(f"warning: rollback could not remove registry entry for '{child_id}'",
+              file=sys.stderr)
+
+
+def _validate_model_available(model: str) -> None:
+    """Raise ValueError if ``model`` is an OpenRouter slug that OpenRouter does not
+    serve (the failure mode that silently kills a session on its first call).
+
+    Only a *definitive* "not in the catalogue" answer blocks creation. If the
+    check itself can't run (no network, API error), we log and proceed — the
+    runtime fatal-error handler is the backstop, and we don't want a flaky check
+    to block all creation. Native (non-"/") models are left to the Anthropic SDK.
+    """
+    from openrouter_client import is_openrouter_model, list_openrouter_model_ids
+
+    if not is_openrouter_model(model):
+        return
+    try:
+        ids = list_openrouter_model_ids(api_key=os.environ.get("OPENROUTER_API_KEY"))
+    except Exception as exc:  # noqa: BLE001 — availability check is advisory
+        print(f"warning: could not verify model '{model}' against OpenRouter "
+              f"({exc}); proceeding", file=sys.stderr)
+        return
+    if model not in ids:
+        raise ValueError(
+            f"model '{model}' is not available on OpenRouter — check the slug at "
+            f"https://openrouter.ai/models (a wrong slug 404s and kills the session)"
+        )
+
+
+def create_cloned_instance(
+    parent: Instance,
+    *,
+    name: str,
+    model: str,
+    require_slack: bool = True,
+    validate_model: bool = True,
+) -> tuple[str, dict]:
+    """Create a NEW, fresh-start instance cloning ``parent``'s config onto ``model``.
+
+    Config-only clone: the child inherits the parent's version, budgets, schedule
+    knobs and research-panel config, but starts with EMPTY memory and workspace
+    (no episodes.db / vectors / workspace copy, no ``experiments/<id>.md`` spec).
+    It is registered PAUSED + inactive with no cron entry, so the currently-active
+    instance is never disturbed.
+
+    Transactional: validates up front (cheapest failures first, before any artifact
+    is created — including that an OpenRouter ``model`` slug is actually served,
+    unless ``validate_model`` is False), then registers locally and provisions
+    Slack. Slack is REQUIRED unless ``require_slack`` is False (tests only). If
+    provisioning — or anything after local registration — fails, the instance is
+    fully rolled back (channels archived where possible, dir deleted, registry
+    entry dropped) and a ``RuntimeError`` is raised. Returns ``(child_id, channels)``
+    on success.
+
+    Note: a Slack failure that aborts mid-provision can orphan the channels created
+    before the failure; provisioning is idempotent (re-running reuses same-named
+    channels), so a retry reclaims them.
+    """
+    name = (name or "").strip()
+    model = (model or "").strip()
+    if parent.version not in VALID_VERSIONS:
+        raise ValueError(f"parent has invalid version {parent.version!r}")
+    if not name:
+        raise ValueError("instance name is required")
+    if not model:
+        raise ValueError("model is required")
+    # Fail before creating any artifact: missing Slack creds, or an OpenRouter
+    # slug OpenRouter doesn't serve (which would 404 and kill the session).
+    if require_slack:
+        _slack_creds()  # raises RuntimeError if SLACK_* env vars are unset
+    if validate_model:
+        _validate_model_available(model)  # raises ValueError on a known-bad slug
+
+    # Build the cloned config: fresh root, new identity + model.
+    cfg = copy.deepcopy(parent.config)
+    cfg["name"] = name
+    cfg["model"] = model
+    cfg["status"] = "paused"
+    cfg["slack"] = {
+        "notes_channel": None, "mirror_channel": None,
+        "chat_channel": None, "advisory_channel": None,
+    }
+    # Strip fork lineage so the clone is a clean root, not a branch.
+    for lineage_key in ("parent_id", "branch_label", "fork_group", "forked_at_invocation"):
+        cfg.pop(lineage_key, None)
+
+    # Register locally (id + dirs + config + registry entry), paused/inactive.
+    with registry_txn() as registry:
+        child_id = new_instance_id(name, registry)
+        if registry_entry(registry, child_id) is not None:
+            raise ValueError(f"instance '{child_id}' already exists")
+        child = Instance(child_id, instance_dir(child_id), cfg)
+        child.ensure_dirs()
+        save_config(child_id, cfg)
+        registry.setdefault("instances", {})[child_id] = {
+            "id": child_id,
+            "name": name,
+            "version": parent.version,
+            "status": "paused",
+            "created_at": now_iso(),
+            "active": False,
+            "last_wake": None,
+        }
+
+    # Provision Slack (required) OUTSIDE the registry lock; roll back on any failure.
+    channels: dict = {}
+    if require_slack:
+        try:
+            channels = _provision_and_save(child_id, private=False)
+            missing = [
+                k for k in ("notes_channel", "mirror_channel", "chat_channel")
+                if not channels.get(k)
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"Slack provisioning returned no id for: {', '.join(missing)}"
+                )
+        except Exception as exc:
+            _rollback_instance(child_id, channels)
+            raise RuntimeError(
+                f"instance creation failed during Slack provisioning and was "
+                f"rolled back: {exc}"
+            ) from exc
+
+    return child_id, channels
+
+
+# --------------------------------------------------------------------------- #
 # subcommands
 # --------------------------------------------------------------------------- #
 
