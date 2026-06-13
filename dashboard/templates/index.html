@@ -351,31 +351,6 @@
   </section>
   {% endif %}
 
-  {% if is_v5 %}
-  <section class="">
-    <h2>Memories kept <span class="small">(free-form memories the agent authored, plus preserved past moments — the v5 single-memory model)</span></h2>
-    {% if authored_memories %}
-      <div class="m-collapsible">
-      <details open>
-        <summary>authored memories <span class="m-hint">· {{ authored_memories|length }}</span></summary>
-        <div class="m-body">
-        <div class="scrollbox">
-        {% for m in authored_memories %}
-          <div style="padding:8px 4px; border-bottom:1px solid var(--border);">
-            <div class="ts">{{ m.timestamp|fmt_dt if m.timestamp else '—' }}{% if m.invocation_num %} · #{{ m.invocation_num }}{% endif %}</div>
-            <div style="white-space:pre-wrap;">{{ m.text }}</div>
-          </div>
-        {% endfor %}
-        </div>
-        </div>
-      </details>
-      </div>
-    {% else %}
-      <div class="empty">No authored memories yet — the agent has not written any with the consolidate tool's memory mode.</div>
-    {% endif %}
-  </section>
-  {% endif %}
-
   {% if is_v4 or is_v5 %}
   <section class="">
     {% if is_v5 %}
@@ -593,6 +568,32 @@
     </div>
     {% endif %}
   </section>
+
+  {# ---------------- Memories kept (v5) — full width, below the timeline ---------------- #}
+  {% if is_v5 %}
+  <section class="wide">
+    <h2>Memories kept <span class="small">(free-form memories the agent authored, plus preserved past moments — the v5 single-memory model)</span></h2>
+    {% if authored_memories %}
+      <div class="m-collapsible">
+      <details open>
+        <summary>authored memories <span class="m-hint">· {{ authored_memories|length }}</span></summary>
+        <div class="m-body">
+        <div class="scrollbox">
+        {% for m in authored_memories %}
+          <div style="padding:8px 4px; border-bottom:1px solid var(--border);">
+            <div class="ts">{{ m.timestamp|fmt_dt if m.timestamp else '—' }}{% if m.invocation_num %} · #{{ m.invocation_num }}{% endif %}</div>
+            <div style="white-space:pre-wrap;">{{ m.text }}</div>
+          </div>
+        {% endfor %}
+        </div>
+        </div>
+      </details>
+      </div>
+    {% else %}
+      <div class="empty">No authored memories yet — the agent has not written any with the consolidate tool's memory mode.</div>
+    {% endif %}
+  </section>
+  {% endif %}
 
   {# ---------------- Research notes (panel review) — after the timeline, mirrors its selector ---------------- #}
   {% if research_notes %}
