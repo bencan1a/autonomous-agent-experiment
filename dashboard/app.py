@@ -689,6 +689,10 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     if selected != "all" and selected is not None:
         events = [e for e in events if e.get("invocation") == selected]
 
+    # Display newest-first. Band/minute computation above relies on ascending
+    # order, so reverse only now, at the end, once those are settled.
+    events = events[::-1]
+
     return {"events": events, "invocations": invocations, "selected": selected}
 
 

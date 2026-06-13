@@ -1,8 +1,10 @@
 {% extends "_base.html" %}
 
 {% block head_extra %}
-  {# Live auto-refresh while a session is actively running. #}
-  {% if is_live %}<meta http-equiv="refresh" content="20">{% endif %}
+  {# Live auto-refresh while a session is actively running. Driven by a JS timer
+     (not <meta refresh>) so the new-instance panel can pause it — see the
+     auto-refresh controller in _base.html. #}
+  {% if is_live %}<script>window.AUTO_REFRESH_SECONDS = 20;</script>{% endif %}
 {% endblock %}
 
 {% block header_meta %}
