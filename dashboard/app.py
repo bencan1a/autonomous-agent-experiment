@@ -797,6 +797,13 @@ def _dashboard_context() -> dict:
         claude_md_current = None
     claude_md_history = store.claude_md_history(limit=50)
 
+    # v5 'recollection': free-form memories the agent authored and kept (the
+    # single-memory model's reflective-authoring channel). Newest first.
+    try:
+        authored_memories = list(reversed(store.all_authored_memories()))
+    except Exception:
+        authored_memories = []
+
     # All-time tool counts and total (cheap: tool name + count only)
     all_actions_for_counts: list[dict] = []
     try:
@@ -938,11 +945,15 @@ def _dashboard_context() -> dict:
             })
 
     # v4 sessions panel (only meaningful for v4 'continuous' instances).
+    # v5 'recollection' reuses v4's waking-period instrument (and the v4_sessions
+    # record), so it renders through the same v4 session tiles. Only its memory
+    # layer differs — surfaced separately via authored_memories below.
     is_v4 = getattr(g.instance, "version", None) == "v4"
+    is_v5 = getattr(g.instance, "version", None) == "v5"
     v4_sessions: list[dict] = []
     v4_summary: dict | None = None
     v4_config: dict | None = None
-    if is_v4:
+    if is_v4 or is_v5:
         try:
             v4_sessions = store.recent_v4_sessions(n=50)
         except Exception:
@@ -1115,9 +1126,11 @@ def _dashboard_context() -> dict:
         "v3_config": v3_config,
         "v3_tick_rows": v3_tick_rows,
         "is_v4": is_v4,
+        "is_v5": is_v5,
         "v4_sessions": v4_sessions,
         "v4_summary": v4_summary,
         "v4_config": v4_config,
+        "authored_memories": authored_memories,
         "weekly_budget": float(os.environ.get("WEEKLY_BUDGET_USD", "300")),
         "daily_budget": float(os.environ.get("DAILY_BUDGET_USD", "50")),
         "experiment_hypothesis": experiment_hypothesis,

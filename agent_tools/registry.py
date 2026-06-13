@@ -416,6 +416,58 @@ TOOLS_SPEC_V4: list[dict[str, Any]] = [
 ] + [_CONSOLIDATE_SPEC, _PAUSE_TURN_SPEC]
 
 
+# --------------------------------------------------------------------------- #
+# v5 tool set (recollection)
+# --------------------------------------------------------------------------- #
+# Same continuous/`pause_turn` terminator as v4, but the MEMORY layer changes:
+#   - The notes-to-self tools (read_agents_md / write_agents_md) are DROPPED.
+#     v5 collapses to a single memory system; there is no privileged, immortal,
+#     auto-injected AGENTS.md to route a task list into. The workspace file tools
+#     remain (write-to-produce), but nothing on disk is fed back as context.
+#   - `consolidate` gains a free-form authoring mode (the `memory` param): the
+#     agent can write a distilled memory of what is worth remembering, not only
+#     pin whole episodes. Both modes coexist (we still retain the raw tick data).
+
+_V5_KEEP = {
+    "web_search", "fetch_url", "read_file", "write_file", "list_directory", "delete_file",
+    "query_episodic_memory", "recent_episodes",
+    "spawn_subagent",
+}  # NB: read_agents_md / write_agents_md deliberately omitted.
+
+_CONSOLIDATE_SPEC_V5: dict[str, Any] = {
+    "name": "consolidate",
+    "description": (
+        "Keep what, if anything, of your past is worth remembering. Two modes, "
+        "usable together: (1) pass episode_ids to preserve whole past episodes "
+        "from the decay horizon (they stay searchable; episodes you do not keep "
+        "are removed once they age past it); (2) pass memory to write a free-form, "
+        "distilled note in your own words about what is worth remembering — stored "
+        "durably and searchable alongside your episodes. Episode ids are shown in "
+        "your recent-episode listing and returned by recent_episodes / "
+        "query_episodic_memory."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "episode_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Optional: ids of whole past episodes to preserve from decay.",
+            },
+            "memory": {
+                "type": "string",
+                "description": "Optional: a free-form memory to keep, in your own words.",
+            },
+        },
+        "required": [],
+    },
+}
+
+TOOLS_SPEC_V5: list[dict[str, Any]] = [
+    t for t in TOOLS_SPEC if t["name"] in _V5_KEEP
+] + [_CONSOLIDATE_SPEC_V5, _PAUSE_TURN_SPEC]
+
+
 def dispatch(tool_name: str, tool_input: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     handler = _HANDLERS.get(tool_name)
     if handler is None:

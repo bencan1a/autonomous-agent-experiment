@@ -45,7 +45,7 @@ SHARED_HF_CACHE = AGENT_ROOT / "data" / "hf_cache"
 UTC = timezone.utc
 
 VALID_STATUSES = ("active", "paused", "archived")
-VALID_VERSIONS = ("v1", "v2", "v3", "v4")
+VALID_VERSIONS = ("v1", "v2", "v3", "v4", "v5")
 
 # The agent's notes-to-self file. Canonical name is vendor-neutral (the agent may
 # run on any model via OpenRouter, not just Claude). A legacy CLAUDE.md is still
@@ -77,6 +77,7 @@ DEFAULT_MODEL_V1 = "claude-opus-4-7"
 DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
 DEFAULT_MODEL_V3 = "claude-opus-4-8"
 DEFAULT_MODEL_V4 = "claude-opus-4-8"
+DEFAULT_MODEL_V5 = "claude-opus-4-8"  # v5 model is variable; reuses v4's default
 
 # Cross-vendor research-panel models (via OpenRouter). The default panel pairs
 # the Anthropic seat with these two other labs to avoid single-family agreement
@@ -191,7 +192,9 @@ class Instance:
 
     @property
     def model(self) -> str:
-        if self.version == "v4":
+        if self.version == "v5":
+            default = DEFAULT_MODEL_V5
+        elif self.version == "v4":
             default = DEFAULT_MODEL_V4
         elif self.version == "v3":
             default = DEFAULT_MODEL_V3
@@ -247,7 +250,8 @@ def default_config(
         "version": version,
         "status": status,
         "model": model or {
-            "v4": DEFAULT_MODEL_V4, "v3": DEFAULT_MODEL_V3, "v2": DEFAULT_MODEL_V2,
+            "v5": DEFAULT_MODEL_V5, "v4": DEFAULT_MODEL_V4, "v3": DEFAULT_MODEL_V3,
+            "v2": DEFAULT_MODEL_V2,
         }.get(version, DEFAULT_MODEL_V1),
         "max_tokens": 4096,
         "min_interval_minutes": 30,
@@ -346,6 +350,32 @@ def default_config(
         # or agent-facing schedule knobs.
         cfg.update({
             "decay_hours": 72,
+            "prompt_caching": True,
+            "in_session_compaction": True,
+            "awake_minutes_min": 110,
+            "awake_minutes_max": 130,
+            "sleep_minutes_min": 220,
+            "sleep_minutes_max": 260,
+            "cadence_active_gap_seconds": 10,
+            "cadence_idle_base_seconds": 60,
+            "cadence_idle_ceil_seconds": 300,
+            "cadence_backoff": 2.0,
+        })
+    elif version == "v5":
+        # v5 'recollection': identical waking-period instrument to v4 (system-owned
+        # wind-down + cron, adaptive cadence, neutral clock). Only the MEMORY layer
+        # differs (no notes-to-self file, non-threaded recall, authored memories).
+        #
+        # decay_hours is 12 (NOT v4's 72): the cycle is ~6h (~2h awake / ~4h rest),
+        # so 72h ≈ 12 cycles — decay never bites within the agent's working horizon,
+        # giving no real curation pressure. 12h ≈ 2 cycles: the last 1–2 sessions
+        # survive automatically (continuity without forced consolidation, so
+        # resumption reflects choice), but older episodes fall away unless kept.
+        # Do NOT go below ~1 cycle (6h): that decays the prior session during the
+        # next rest, confounding H1 (empty memory reads as 'no continuation') and
+        # turning consolidation into a mandatory chore — the task dynamic v5 removes.
+        cfg.update({
+            "decay_hours": 12,
             "prompt_caching": True,
             "in_session_compaction": True,
             "awake_minutes_min": 110,

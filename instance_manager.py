@@ -986,6 +986,90 @@ def cmd_research_approve(args: argparse.Namespace) -> int:
     return _err("approval did not match any coding-scheme row.")
 
 
+def cmd_research_operationalize(args: argparse.Namespace) -> int:
+    """Turn the formal spec into the operational coding scheme via ONE LLM call,
+    without running an agent session. Lets the operator review + approve the scheme
+    before the instance ever wakes. No-ops (idempotent) if already operationalized
+    for the current spec_hash. Editing the spec bumps the hash -> a fresh scheme."""
+    registry = load_registry()
+    if registry_entry(registry, args.id) is None:
+        return _err(f"no such instance: {args.id}")
+    try:
+        inst = load_instance(args.id)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    # Shell may export ANTHROPIC_API_KEY=""; force it from .env (as the runners do).
+    try:
+        from dotenv import load_dotenv as _ld
+        _ld(AGENT_ROOT / ".env", override=True)
+    except Exception:
+        pass
+    import os as _os
+
+    import anthropic
+    from research import prereg as prereg_mod
+    from research.providers import get_provider
+    from research.seats import seats_from_config
+    from research.spec import load_spec
+    from research.store import ResearchStore
+
+    spec = load_spec(AGENT_ROOT, inst.id)
+    if spec is None:
+        return _err(
+            f"no valid formal spec block in experiments/{inst.id}.md — author one first."
+        )
+
+    rs = ResearchStore(inst.episodes_db)
+    existing = rs.get_prereg(inst.id, spec.spec_hash)
+    if existing is not None:
+        print(
+            f"'{inst.id}': coding scheme already operationalized for this spec "
+            f"(status={existing.get('status')}, spec_hash={spec.spec_hash[:12]}). "
+            "Nothing to do."
+        )
+        return 0
+
+    research_cfg = inst.config.get("research") or {}
+    seats = seats_from_config(research_cfg)
+    if not seats:
+        return _err("no research seats configured for this instance.")
+    max_tokens = int(research_cfg.get("max_tokens", 2048))
+
+    client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
+    provider = get_provider(seats[0].provider, anthropic_client=client)
+
+    costs = {"usd": 0.0}
+
+    def _on_cost(r: Any) -> None:
+        costs["usd"] += float(getattr(r, "cost_usd", 0.0) or 0.0)
+
+    print(
+        f"Operationalizing the formal spec for '{inst.id}' into a coding scheme "
+        f"(one {seats[0].model} call, real API spend)..."
+    )
+    _spec, prereg = prereg_mod.load_or_create(
+        experiment_id=inst.id,
+        agent_root=AGENT_ROOT,
+        research_store=rs,
+        provider=provider,
+        model=seats[0].model,
+        max_tokens=max_tokens,
+        on_cost=_on_cost,
+    )
+    if prereg is None:
+        return _err("operationalization produced no coding scheme (see logs).")
+    print(
+        f"  coding scheme: status={prereg.get('status')} "
+        f"(spec_hash={str(prereg.get('spec_hash'))[:12]}) · "
+        f"{len(prereg.get('code_vocab') or [])} codes · cost=${costs['usd']:.4f}"
+    )
+    for c in prereg.get("code_vocab") or []:
+        maps = f" [{c.get('maps_to_hypothesis')}]" if c.get("maps_to_hypothesis") else ""
+        print(f"    - {c.get('code')}{maps}: {c.get('definition')}")
+    print(f"\nReview, then approve with:  instance_manager.py research approve {inst.id}")
+    return 0
+
+
 def cmd_research_synthesize(args: argparse.Namespace) -> int:
     registry = load_registry()
     if registry_entry(registry, args.id) is None:
@@ -1140,6 +1224,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_r_show = rsub.add_parser("show", help="show the formal spec + coding scheme + status")
     p_r_show.add_argument("id", help="instance id")
     p_r_show.set_defaults(func=cmd_research_show)
+    p_r_op = rsub.add_parser(
+        "operationalize",
+        help="generate the coding scheme from the formal spec (one LLM call, no agent session)",
+    )
+    p_r_op.add_argument("id", help="instance id")
+    p_r_op.set_defaults(func=cmd_research_operationalize)
     p_r_approve = rsub.add_parser(
         "approve", help="approve the coding scheme (makes per-session notes 'binding')"
     )

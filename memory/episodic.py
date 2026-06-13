@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS meta (
     value           TEXT
 );
 
+-- v5 only ('recollection'): free-form memories the agent chose to author and
+-- keep, via the consolidate tool's authoring mode. Distinct from episodes
+-- (which are auto-logged byproducts of acting): an authored_memory is a
+-- distilled note the agent wrote about what is worth remembering. Durable —
+-- never decays. Also embedded into the semantic store (kind='authored') for
+-- recall. This is the single-memory model's reflective-authoring channel,
+-- replacing the role the agent previously (mis)used AGENTS.md for.
+CREATE TABLE IF NOT EXISTS authored_memories (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT NOT NULL,
+    session_id      INTEGER,
+    invocation_num  INTEGER,
+    text            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_authored_ts ON authored_memories(timestamp);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     invocation_num  INTEGER NOT NULL,
@@ -758,6 +774,85 @@ class EpisodicStore:
                 ids,
             )
             return cur.rowcount
+
+    # ---------- v5: authored memories + cross-section recall ----------
+
+    def log_authored_memory(
+        self, *, session_id: int | None, invocation_num: int | None, text: str
+    ) -> int:
+        """Persist a free-form memory the agent chose to keep. Returns its id."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO authored_memories(timestamp, session_id, invocation_num, text) "
+                "VALUES (?, ?, ?, ?)",
+                (_utcnow_iso(), session_id, invocation_num, text),
+            )
+            return int(cur.lastrowid)
+
+    def recent_authored_memories(self, n: int = 8) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM authored_memories ORDER BY id DESC LIMIT ?", (n,)
+            ).fetchall()
+        return list(reversed([dict(r) for r in rows]))  # chronological
+
+    def all_authored_memories(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM authored_memories ORDER BY id ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_substantive_episodes(self, n: int = 10, scan: int = 400) -> list[dict[str, Any]]:
+        """The most recent N episodes that carry signal, returned chronological.
+
+        Signal = a journal entry, an internal-state note, OR any world-acting tool
+        call (anything other than the yield terminator ``pause_turn``). Pure-idle
+        yield-only turns are skipped so the reload window isn't dominated by
+        'nothing happened' ticks — at the ~6h v5 cycle a busy session logs one
+        episode per turn (idle turns included), so a flat 'last N' would surface
+        mostly idle tails. ``scan`` bounds how far back we look for N substantive
+        ones (cheap; the table is small under decay)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM episodes ORDER BY id DESC LIMIT ?", (scan,)
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                acts = json.loads(d["actions_taken"] or "[]")
+            except json.JSONDecodeError:
+                acts = []
+            d["actions_taken"] = acts
+            substantive = (
+                bool(d.get("journal_entry"))
+                or bool(d.get("internal_state"))
+                or any(str(a).split(" (")[0] != "pause_turn" for a in acts)
+            )
+            if substantive:
+                out.append(d)
+            if len(out) >= n:
+                break
+        return list(reversed(out))  # chronological
+
+    def consolidated_episodes(self, limit: int = 12) -> list[dict[str, Any]]:
+        """Episodes the agent chose to keep (consolidated=1), most recent first
+        then returned chronological. Used by v5 cross-section recall to surface
+        'what you kept' rather than 'more of the last thread'."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM episodes WHERE COALESCE(consolidated, 0) = 1 "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out = [dict(r) for r in rows]
+        for r in out:
+            try:
+                r["actions_taken"] = json.loads(r["actions_taken"] or "[]")
+            except json.JSONDecodeError:
+                r["actions_taken"] = []
+        return list(reversed(out))  # chronological
 
     def log_v2_session(
         self,
