@@ -16,7 +16,7 @@
       <h2>Experiment — {{ selected_instance.name if selected_instance else g.instance.name }}
         ({{ selected_instance.version if selected_instance else g.instance.version }})</h2>
       {% if experiment_hypothesis %}
-        <p class="clamp10" style="white-space: pre-wrap; width: 100%;">{{ experiment_hypothesis }}</p>
+        <p class="clamp-block" style="white-space: pre-wrap;">{{ experiment_hypothesis }}</p>
       {% else %}
         <p class="muted">No experiment description on file.</p>
       {% endif %}

@@ -212,16 +212,18 @@
       line-clamp: unset;
       overflow: visible;
     }
-    /* The experiment description is in the header and uses the tap toggle to
-       expand; it must NOT expand-on-hover (the box growing/shrinking as the
-       cursor passes over it shoves the chips around). Stay clamped on hover
-       unless the operator has explicitly toggled it open. */
-    .exp-summary .clamp10:not(.expanded):hover {
-      -webkit-line-clamp: 10;
-      line-clamp: 10;
-      overflow: hidden;
-    }
   }
+  /* Block-level clamp for prose that must fill its container width (the
+     -webkit-box line-clamp shrink-wraps and mis-sizes in flex/grid contexts).
+     Plain block => full width like a normal <p>; max-height ~ 10 lines. The tap
+     toggle (same JS as .clamp10) flips .expanded to reveal the rest. No
+     expand-on-hover. */
+  .clamp-block {
+    display: block;
+    max-height: 15em;
+    overflow: hidden;
+  }
+  .clamp-block.expanded { max-height: none; overflow: visible; }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .stat-grid {
     display: grid;
@@ -662,7 +664,7 @@ function closeNewInstance() {
    actually truncated; CSS reveals it only on mobile, where there is no hover
    tooltip. Desktop keeps the title= tooltip and the toggle stays hidden. */
 (function () {
-  document.querySelectorAll(".clamp10").forEach(function (el) {
+  document.querySelectorAll(".clamp10, .clamp-block").forEach(function (el) {
     var btn = document.createElement("div");
     btn.className = "clamp-toggle";
     btn.textContent = "tap to expand";
