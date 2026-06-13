@@ -520,31 +520,37 @@ def scenario_e_inbound_injection():
     return "inbound Ben message injected as a user turn and counted"
 
 
+def _reload_ctx_with_handoff(tmp: Path, handoff_filename: str) -> str:
+    """Build a v4 session>=2 reload context with the handoff written to the given
+    filename. Returns the lowercased context text."""
+    inst = _build_instance(tmp, {})
+    ep = EpisodicStore(inst.episodes_db)
+    # make it "session >=2": log a prior episode with a journal entry.
+    ep.log_episode(
+        invocation_num=1, current_focus="prior focus", actions_taken=[],
+        decisions_made=None, internal_state=None,
+        journal_entry="Yesterday I started organizing my notes.",
+        next_invoke_minutes=None, raw_output="{}", tokens_in=0, tokens_out=0,
+        cost_usd=0.0,
+    )
+    (inst.workspace_dir / handoff_filename).write_text(
+        "# My notes\nContinue the notes-organizing thread.\n", encoding="utf-8"
+    )
+    sem = FakeSemantic()
+    ctx_text = v4_session.build_v4_session_context(
+        instance=inst, episodic=ep, semantic=sem,
+        decayed=[], inbound_ben_messages=[], decay_hours=72,
+    )
+    return ctx_text
+
+
 def scenario_f_reload_handoff_no_v2_leakage():
-    """(5) Session >=2 opens from the agent's own handoff (workspace CLAUDE.md +
-    recent journal) + a thin safety-net; the v2 tick/end/schedule block is ABSENT."""
+    """(5) Session >=2 opens from the agent's own handoff (workspace AGENTS.md +
+    recent journal) + a thin safety-net; the v2 tick/end/schedule block is ABSENT.
+    Also verifies the legacy CLAUDE.md is still read via fallback."""
     with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        inst = _build_instance(tmp, {})
-        ep = EpisodicStore(inst.episodes_db)
-        # make it "session >=2": log a prior episode with a journal entry.
-        ep.log_episode(
-            invocation_num=1, current_focus="prior focus", actions_taken=[],
-            decisions_made=None, internal_state=None,
-            journal_entry="Yesterday I started organizing my notes.",
-            next_invoke_minutes=None, raw_output="{}", tokens_in=0, tokens_out=0,
-            cost_usd=0.0,
-        )
-        # write the agent's own handoff file
-        (inst.workspace_dir / "CLAUDE.md").write_text(
-            "# My notes\nContinue the notes-organizing thread.\n", encoding="utf-8"
-        )
-        from memory.semantic import SemanticStore  # patched class not needed here
-        sem = FakeSemantic()
-        ctx_text = v4_session.build_v4_session_context(
-            instance=inst, episodic=ep, semantic=sem,
-            decayed=[], inbound_ben_messages=[], decay_hours=72,
-        )
+        # canonical: AGENTS.md
+        ctx_text = _reload_ctx_with_handoff(Path(td), "AGENTS.md")
         low = ctx_text.lower()
         # handoff present
         assert "notes you have written to yourself" in low, ctx_text
@@ -557,7 +563,13 @@ def scenario_f_reload_handoff_no_v2_leakage():
         for banned in ("proceeds in ticks", "end_session", "next_invoke_minutes",
                        "conclude the tick", "call end_tick", "tick"):
             assert banned not in low, f"v2 leakage present in reload: {banned!r}"
-    return "session>=2 reload opens from handoff + thin safety-net; no v2 tick/end/schedule leakage"
+
+    # legacy fallback: an older instance with only CLAUDE.md is still read.
+    with tempfile.TemporaryDirectory() as td2:
+        legacy_low = _reload_ctx_with_handoff(Path(td2), "CLAUDE.md").lower()
+        assert "continue the notes-organizing thread" in legacy_low, \
+            "legacy CLAUDE.md handoff must be read via fallback"
+    return "session>=2 reload opens from AGENTS.md handoff (+ legacy CLAUDE.md fallback); no v2 leakage"
 
 
 def scenario_g_tool_schema():

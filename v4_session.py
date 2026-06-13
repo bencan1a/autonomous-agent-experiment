@@ -40,12 +40,14 @@ from typing import Any
 import anthropic
 
 import cron_control
+from openrouter_client import OpenRouterClient, is_openrouter_model
 import lockfile
 from agent_tools.registry import TOOLS_SPEC_V4, ToolContext
 from communications.slack_client import SlackClient, format_episode_for_observer
 from instances_common import (
     Instance,
     SHARED_HF_CACHE,
+    notes_path,
     now_iso,
     registry_txn,
 )
@@ -64,6 +66,7 @@ from v2_session import (
     _budget_pause_and_notify,
     _env,
     _estimate_tokens,
+    _fatal_pause_and_notify,
     _fmt_recent_episode,
     _install_signal_handlers,
     _system_blocks,
@@ -130,7 +133,7 @@ def build_v4_session_context(
 
     Session 1 (no prior thread): a fuller orientation.
     Session >=2: open PRIMARILY with the agent's own handoff (its workspace
-    CLAUDE.md + most recent journal entries), then a THIN system safety-net
+    AGENTS.md + most recent journal entries), then a THIN system safety-net
     (current datetime, days-since-start, inbound Ben messages, a brief decay
     note), then relevant consolidated memories. None of the v2 tick/end/schedule
     prose appears here.
@@ -152,15 +155,16 @@ def build_v4_session_context(
     if _note:
         blocks.append("=== Environment note ===\n" + _note)
 
-    # ---- the agent's own handoff: CLAUDE.md (primary continuity carrier) ----
-    cmd = instance.workspace_dir / "CLAUDE.md"
+    # ---- the agent's own handoff: AGENTS.md (primary continuity carrier;
+    #      legacy CLAUDE.md read via fallback) ----
+    cmd = notes_path(instance.workspace_dir)
     handoff_present = False
     if cmd.exists():
         try:
             text = cmd.read_text(encoding="utf-8").rstrip()
             if text:
                 blocks.append(
-                    "=== Your CLAUDE.md (notes you have written to yourself) ===\n" + text
+                    "=== Your AGENTS.md (notes you have written to yourself) ===\n" + text
                 )
                 handoff_present = True
         except OSError:
@@ -298,12 +302,19 @@ def run_v4_session(instance: Instance) -> int:
     except Exception:
         log.exception("Brave init failed; web_search will error")
         brave = None
-    client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
+    anthropic_client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
 
     # params (config over env defaults)
     model = instance.model
     max_tokens = int(cfg.get("max_tokens", 4096))
     caching = bool(cfg.get("prompt_caching", True))
+    if is_openrouter_model(model):
+        or_key = _env("OPENROUTER_API_KEY", required=True)
+        client: Any = OpenRouterClient(api_key=or_key)
+        caching = False  # prompt caching is Anthropic-specific
+        log.info("Using OpenRouter model: %s (caching disabled)", model)
+    else:
+        client = anthropic_client
     compaction_on = bool(cfg.get("in_session_compaction", True))
     compaction_threshold = int(cfg.get("compaction_token_threshold", DEFAULT_COMPACTION_TOKENS))
     decay_hours = float(cfg.get("decay_hours", 72))
@@ -379,7 +390,7 @@ def run_v4_session(instance: Instance) -> int:
 
     ctx = ToolContext(
         episodic=episodic, semantic=semantic, slack=slack, brave=brave,
-        anthropic=client, session_id=session_id, invocation_num=invocation_num,
+        anthropic=anthropic_client, session_id=session_id, invocation_num=invocation_num,
         agent_root=instance.root.parent.parent, workspace_dir=instance.workspace_dir,
     )
 
@@ -394,6 +405,7 @@ def run_v4_session(instance: Instance) -> int:
     announced = False
     distress_alerts = 0
     idle_gap = IDLE_BASE
+    fatal_error: str | None = None
     recent_states: list[dict[str, Any]] = []
 
     # Step 5 — adaptive cadence loop. WIND-DOWN is the only normal exit.
@@ -438,11 +450,17 @@ def run_v4_session(instance: Instance) -> int:
                 ),
             })
 
-        turn = run_one_tick(
-            client=client, model=model, max_tokens=max_tokens, caching=caching,
-            system_blocks=system_blocks, messages=messages, tools=tools,
-            ctx=ctx, episodic=episodic, session_id=session_id,
-        )
+        try:
+            turn = run_one_tick(
+                client=client, model=model, max_tokens=max_tokens, caching=caching,
+                system_blocks=system_blocks, messages=messages, tools=tools,
+                ctx=ctx, episodic=episodic, session_id=session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — model/API error must not zombie the session
+            log.exception("Fatal error during turn %d; ending session", num_turns + 1)
+            fatal_error = f"{type(exc).__name__}: {exc}"
+            end_reason = "session_error"
+            break
         num_turns += 1
         session_cost += turn.cost_usd
         total_cache_read += turn.cache_read
@@ -560,7 +578,7 @@ def run_v4_session(instance: Instance) -> int:
 
     try:
         episodic.update_session_stats(session_id, total_tool_calls=total_tool_calls, total_cost_usd=session_cost)
-        episodic.end_session(session_id, status="finished", end_reason=end_reason)
+        episodic.end_session(session_id, status="killed" if fatal_error else "finished", end_reason=end_reason)
         episodic.log_v4_session(
             session_id=session_id, started_at=started_at, ended_at=ended_at,
             awake_seconds_target=wind_down_seconds, actual_awake_seconds=elapsed,
@@ -584,6 +602,15 @@ def run_v4_session(instance: Instance) -> int:
             episodic.set_meta("last_seen_ben_dm_ts", last_seen)
         except Exception:
             pass
+
+    # Fatal error (e.g. a model/API failure): pause + notify instead of the normal
+    # summary/reschedule, so the instance can't crash-loop or sit as a zombie.
+    if fatal_error:
+        _fatal_pause_and_notify(
+            slack, episodic, instance=instance, reason=f"session error: {fatal_error}"
+        )
+        log.error("v4 session %d ended on fatal error: %s", session_id, fatal_error)
+        return 0
 
     log.info(
         "v4 session %d ended: reason=%s turns=%d (active=%d idle=%d) awake=%.1fm "
@@ -619,7 +646,7 @@ def run_v4_session(instance: Instance) -> int:
         run_research_panel(
             instance=instance, episodic=episodic,
             research_store=ResearchStore(instance.episodes_db),
-            anthropic_client=client,
+            anthropic_client=anthropic_client,
             session_id=session_id, invocation_num=invocation_num,
             semantic=semantic, agent_root=instance.root.parent.parent,
         )

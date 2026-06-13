@@ -1,14 +1,14 @@
 {% extends "_base.html" %}
 
-{% block title %}CLAUDE.md history — dashboard{% endblock %}
+{% block title %}AGENTS.md history — dashboard{% endblock %}
 
 {% block header_meta %}
-  &nbsp; CLAUDE.md
+  &nbsp; AGENTS.md
 {% endblock %}
 
 {% block main %}
   <section class="wide">
-    <h2>CLAUDE.md — current</h2>
+    <h2>AGENTS.md — current</h2>
     <div class="small" style="margin-bottom: 6px;">
       Path: <code>{{ claude_md_path }}</code>
       {% if claude_md_size is not none %} · size: {{ claude_md_size }} bytes{% endif %}
@@ -16,7 +16,7 @@
     {% if claude_md_current %}
       <pre>{{ claude_md_current }}</pre>
     {% else %}
-      <div class="empty">Agent has not written a CLAUDE.md.</div>
+      <div class="empty">Agent has not written an AGENTS.md.</div>
     {% endif %}
   </section>
 

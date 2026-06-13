@@ -68,7 +68,7 @@ episodes are *not* auto-embedded — they live only in SQLite and **decay** afte
 
 **The agent's tools.** `agent_tools/registry.py` defines `TOOLS_SPEC` (v1) and
 `TOOLS_SPEC_V2`, plus `dispatch()` and `ToolContext`. `ToolContext` carries the stores,
-clients, `workspace_dir` (file/CLAUDE.md tools are sandboxed to it), and the loop's exit
+clients, `workspace_dir` (file/AGENTS.md tools are sandboxed to it), and the loop's exit
 state — `finish_state` for v1, `tick_state` for v2. v2's tool set drops v1's comms/finish
 tools in favor of `end_tick` (which carries the per-tick schema) + `consolidate`.
 
@@ -88,9 +88,14 @@ points an external agent at it.
 
 ## Conventions and gotchas (these have bitten us)
 
-- **Two different `CLAUDE.md` files.** This one is Claude Code's project guidance (repo
-  root, committed). The *agent* also writes its own notes-to-self at
-  `instances/<id>/workspace/CLAUDE.md` at runtime (gitignored). Don't conflate them.
+- **The agent's notes-to-self is `AGENTS.md`, not this file.** This repo-root `CLAUDE.md`
+  is Claude Code's project guidance (committed). The *agent* writes its own notes-to-self
+  at `instances/<id>/workspace/AGENTS.md` at runtime (gitignored) — vendor-neutral because
+  the agent may run on any OpenRouter model, not just Claude. Reads fall back to a legacy
+  `workspace/CLAUDE.md` if an older instance only has that; new writes always target
+  `AGENTS.md`. The name is resolved by `instances_common.notes_path()` (single source of
+  truth); the agent's tools are `read_agents_md`/`write_agents_md`. Don't conflate the two
+  files.
 - **Running `orchestrator.py` manually spends real API budget and posts to Slack** — it
   *is* the live experiment. Don't run it casually; prefer the mocked
   `tests/test_v2_session.py` for logic checks.

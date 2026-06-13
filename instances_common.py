@@ -13,7 +13,7 @@ Layout::
           episodes.db          # SQLite episodic store
           vectors/             # LanceDB semantic index
           orchestrator.lock    # per-instance single-run lock
-        workspace/             # the agent's sandbox (CLAUDE.md, foundation.md, ...)
+        workspace/             # the agent's sandbox (AGENTS.md, foundation.md, ...)
         logs/orchestrator.log
       registry.json            # id -> {name, version, status, created_at, active, last_wake}
       data/hf_cache/           # SHARED embedding-model cache (never per-instance)
@@ -47,6 +47,32 @@ UTC = timezone.utc
 VALID_STATUSES = ("active", "paused", "archived")
 VALID_VERSIONS = ("v1", "v2", "v3", "v4")
 
+# The agent's notes-to-self file. Canonical name is vendor-neutral (the agent may
+# run on any model via OpenRouter, not just Claude). A legacy CLAUDE.md is still
+# read if present so existing instances keep continuity; new writes target the
+# canonical name. See the "notes file" gotcha in the repo-root CLAUDE.md.
+NOTES_FILENAME = "AGENTS.md"
+LEGACY_NOTES_FILENAMES = ("CLAUDE.md",)
+
+
+def notes_path(workspace_dir: Path | str) -> Path:
+    """Resolve the agent's notes-to-self file in ``workspace_dir``.
+
+    Prefers the canonical ``AGENTS.md``; falls back to a legacy ``CLAUDE.md`` if
+    only that exists. When neither exists, returns the canonical path — which is
+    therefore also the target for the first write (writes must NOT use the legacy
+    fallback, so the first write migrates the instance forward).
+    """
+    base = Path(workspace_dir)
+    canonical = base / NOTES_FILENAME
+    if canonical.exists():
+        return canonical
+    for legacy in LEGACY_NOTES_FILENAMES:
+        p = base / legacy
+        if p.exists():
+            return p
+    return canonical
+
 DEFAULT_MODEL_V1 = "claude-opus-4-7"
 DEFAULT_MODEL_V2 = "claude-sonnet-4-6"
 DEFAULT_MODEL_V3 = "claude-opus-4-8"
@@ -57,6 +83,30 @@ DEFAULT_MODEL_V4 = "claude-opus-4-8"
 # inflation. Require OPENROUTER_API_KEY; absent it, these seats degrade.
 DEFAULT_RESEARCH_MISTRAL = "mistralai/mistral-large"
 DEFAULT_RESEARCH_GEMINI = "google/gemini-2.5-pro"
+
+# Curated shortlist offered in the dashboard "new instance" model dropdown:
+# frontier-tier models in roughly the same capability league as Opus, for
+# experimental model-comparison runs. (slug, human label) pairs.
+#
+# Native Anthropic slugs (no "/") run on the Anthropic client with prompt
+# caching; "vendor/slug" entries route via OpenRouter (is_openrouter_model()
+# keys on the "/") and require OPENROUTER_API_KEY.
+#
+# NOTE: OpenRouter slugs drift as vendors ship new versions — verify against the
+# live list (https://openrouter.ai/api/v1/models) and edit here as needed; this
+# is the single source of truth the dashboard renders.
+CANDIDATE_MODELS: list[tuple[str, str]] = [
+    ("claude-opus-4-8",                    "Claude Opus 4.8 (Anthropic · native)"),
+    ("claude-sonnet-4-6",                  "Claude Sonnet 4.6 (Anthropic · native)"),
+    ("openai/gpt-5.5",                     "GPT-5.5 (OpenAI · OpenRouter)"),
+    ("openai/gpt-5.5-pro",                 "GPT-5.5 Pro (OpenAI · OpenRouter)"),
+    ("google/gemini-3.1-pro-preview",      "Gemini 3.1 Pro (Google · OpenRouter)"),
+    ("x-ai/grok-4.3",                      "Grok 4.3 (xAI · OpenRouter)"),
+    ("deepseek/deepseek-chat",             "DeepSeek V3.2 chat (DeepSeek · OpenRouter)"),
+    ("mistralai/mistral-large",            "Mistral Large (Mistral · OpenRouter)"),
+    ("meta-llama/llama-3.3-70b-instruct",  "Llama 3.3 70B (Meta · OpenRouter)"),
+    ("qwen/qwen3.7-max",                   "Qwen3.7 Max (Alibaba · OpenRouter)"),
+]
 
 
 def now_iso() -> str:

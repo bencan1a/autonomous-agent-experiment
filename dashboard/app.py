@@ -36,12 +36,15 @@ import cron_control  # noqa: E402
 import instance_control  # noqa: E402
 from instances_common import (  # noqa: E402
     active_instance_ids,
+    CANDIDATE_MODELS,
     list_instances,
     load_instance,
+    notes_path,
     registry_entry,
     registry_txn,
     save_config,
 )
+from instance_manager import create_cloned_instance  # noqa: E402
 from system_prompt import SYSTEM_PROMPT  # noqa: E402
 from agent_tools.registry import TOOLS_SPEC  # noqa: E402
 
@@ -65,8 +68,10 @@ _TOOL_CATEGORIES = [
 
 _TOOL_VERBS = {
     "web_search": "browsed the web", "fetch_url": "browsed the web",
-    "write_file": "wrote files", "write_claude_md": "updated notes-to-self",
-    "read_file": "read files", "read_claude_md": "read notes-to-self",
+    "write_file": "wrote files", "write_agents_md": "updated notes-to-self",
+    "write_claude_md": "updated notes-to-self",  # legacy tool name (historical rows)
+    "read_file": "read files", "read_agents_md": "read notes-to-self",
+    "read_claude_md": "read notes-to-self",  # legacy tool name (historical rows)
     "list_directory": "read files", "delete_file": "deleted files",
     "query_episodic_memory": "recalled memory", "recent_episodes": "recalled memory",
     "consolidate": "saved memories to long-term",
@@ -179,8 +184,10 @@ def _inject_instance_context():
     instances = list_instances()
     selected = None
     cost_total = 0.0
+    current_model = None
     inst = getattr(g, "instance", None)
     if inst is not None:
+        current_model = inst.model
         # Find the registry entry for richer status/active fields.
         entry = next((i for i in instances if i["id"] == inst.id), None)
         branch_label = (entry or {}).get("branch_label") or inst.config.get("branch_label")
@@ -190,6 +197,7 @@ def _inject_instance_context():
             "version": inst.version,
             "status": (entry or {}).get("status"),
             "active": (entry or {}).get("active", False),
+            "model": current_model,
             # lineage (None for non-forked instances)
             "branch_label": branch_label,
             "parent_id": (entry or {}).get("parent_id") or inst.config.get("parent_id"),
@@ -206,10 +214,20 @@ def _inject_instance_context():
                 selected["cycle_label"] = f"{store.next_invocation_num()}{branch_label}"
         except Exception:
             cost_total = 0.0
+
+    # Model choices for the "new instance" panel: the curated shortlist, with the
+    # current instance's model prepended if it isn't already in the list (so the
+    # panel can preselect it as the default).
+    model_choices = list(CANDIDATE_MODELS)
+    if current_model and current_model not in {m for m, _ in model_choices}:
+        model_choices = [(current_model, f"{current_model} (current)")] + model_choices
+
     return {
         "instances": instances,
         "selected_instance": selected,
         "instance_cost_total": round(cost_total, 4),
+        "candidate_models": model_choices,
+        "current_model": current_model,
     }
 
 
@@ -226,7 +244,8 @@ def _workspace_root() -> Path:
 
 
 def _claude_md_path() -> Path:
-    return _workspace_root() / "CLAUDE.md"
+    # Prefers AGENTS.md; falls back to a legacy CLAUDE.md if that's all the instance has.
+    return notes_path(_workspace_root())
 
 
 def _session_live(session: dict | None) -> bool:
@@ -1023,12 +1042,24 @@ def _dashboard_context() -> dict:
     next_fire_iso = next_fire.isoformat() if next_fire else None
     next_fire_epoch_ms = int(next_fire.timestamp() * 1000) if next_fire else None
 
+    control_msg_is_error = _control_arg in ("badpass", "create_failed")
+    # These must show even when the landing instance is operator-paused (the
+    # create flow + auth errors land on the parent, which may be paused).
+    control_msg_always_show = _control_arg in ("badpass", "create_failed", "created")
     if _control_arg == "resumed":
         if next_fire is not None:
             mins = max(1, round((next_fire - datetime.now()).total_seconds() / 60))
             control_msg = f"Resumed — next wake {next_fire:%H:%M} UTC (~{mins} min)."
         else:
             control_msg = "Resumed — next wake scheduled."
+    elif _control_arg == "created":
+        control_msg = (
+            f"Created paused instance '{g.instance.id}' on model "
+            f"{g.instance.model}. Activate it when ready."
+        )
+    elif _control_arg == "create_failed":
+        reason = request.args.get("reason") or "unknown error"
+        control_msg = f"Instance creation failed and was rolled back: {reason}"
     else:
         control_msg = {
             "paused": "Paused.",
@@ -1093,6 +1124,8 @@ def _dashboard_context() -> dict:
         "experiment_properties": experiment_properties,
         "control_state": control_state,
         "control_msg": control_msg,
+        "control_msg_is_error": control_msg_is_error,
+        "control_msg_always_show": control_msg_always_show,
         "timeline_events": timeline["events"],
         "timeline_invocations": timeline["invocations"],
         "timeline_selected": timeline["selected"],
@@ -1220,6 +1253,31 @@ def resume():
     except Exception:
         app.logger.exception("failed to schedule near-term wake on resume")
     return redirect(url_for("index", instance=iid, control="resumed"))
+
+
+@app.route("/control/create_instance", methods=["POST"])
+def create_instance():
+    """Clone the current instance's config onto a different model as a new,
+    fresh-start (paused) instance. Same control password as pause/resume; the
+    clone is transactional (full rollback + visible error on any failure)."""
+    if getattr(g, "instance", None) is None:
+        abort(404)
+    parent = g.instance
+    pid = parent.id
+    if not _control_authorized(request.form.get("password")):
+        return redirect(url_for("index", instance=pid, control="badpass"))
+
+    name = (request.form.get("name") or "").strip() or f"{parent.name} clone"
+    model = (request.form.get("model") or "").strip()
+    try:
+        child_id, _ = create_cloned_instance(parent, name=name, model=model)
+    except Exception as exc:
+        app.logger.exception("create_instance failed (rolled back)")
+        reason = str(exc)
+        if len(reason) > 300:
+            reason = reason[:300] + "…"
+        return redirect(url_for("index", instance=pid, control="create_failed", reason=reason))
+    return redirect(url_for("index", instance=child_id, control="created"))
 
 
 def _experiment_hypothesis(instance_id: str) -> str | None:
@@ -1667,7 +1725,7 @@ def prompt_view():
         "you will not be woken again unless Ben manually restarts you."
     )
     context_blocks = [
-        ("Your CLAUDE.md", "Notes the agent has written to itself (current file from agent_workspace/CLAUDE.md). Loaded only when non-empty."),
+        ("Your AGENTS.md", "Notes the agent has written to itself (current file from the workspace; legacy CLAUDE.md read via fallback). Loaded only when non-empty."),
         ("Clock + invocation #", "Current datetime (UTC), invocation number, days since start."),
         ("Last episodes", "Up to 3 most recent episodes in full (focus, actions, internal_state, journal, decisions, next_invoke_minutes)."),
         ("Semantic recall", "Top-k semantic search hits over older episodes + weekly summaries, queried by the most recent episode's current_focus. Skipped if no focus yet."),
@@ -1937,8 +1995,8 @@ def _collect_claude_md_diffs(store: EpisodicStore, session_id: int) -> list[dict
             difflib.unified_diff(
                 prev_content.splitlines(keepends=True),
                 curr_content.splitlines(keepends=True),
-                fromfile="CLAUDE.md (prev)",
-                tofile="CLAUDE.md (this snapshot)",
+                fromfile="AGENTS.md (prev)",
+                tofile="AGENTS.md (this snapshot)",
             )
         )
         diffs.append({
@@ -2202,11 +2260,11 @@ def _bundle_markdown(bundle: dict, verbose: bool) -> str:
         else:
             L.append(f"- (too large to inline at {size} B; fetch via link or use ?verbose=1)")
 
-    # --- CLAUDE.md changes ---
+    # --- AGENTS.md changes ---
     L.append("")
-    L.append("## CLAUDE.md changes")
+    L.append("## AGENTS.md changes")
     if not bundle["claude_md_diffs"]:
-        L.append("_No CLAUDE.md change this invocation._")
+        L.append("_No AGENTS.md change this invocation._")
     for d in bundle["claude_md_diffs"]:
         L.append("")
         L.append(f"_snapshot #{d['id']} @ {d['timestamp']} ({d['size']} B)_")
@@ -2409,14 +2467,14 @@ def _api_endpoints(base: str) -> list[dict]:
         },
         {
             "method": "GET", "path": "/api/instance/<id>/invocation/<n>",
-            "description": "Full bundle for one invocation (= one session). Header + v2 wakefulness, per-tick narrative, tool-action table, Documents (files the agent wrote), CLAUDE.md unified diffs, comms, capability requests.",
+            "description": "Full bundle for one invocation (= one session). Header + v2 wakefulness, per-tick narrative, tool-action table, Documents (files the agent wrote), AGENTS.md unified diffs, comms, capability requests.",
             "params": {"format": "json|md (default md)", "verbose": "1 = untruncated tool output + all docs inlined"},
             "example": f"{base}/api/instance/v2-environmental/invocation/1",
         },
         {
             "method": "GET", "path": "/api/instance/<id>/file/<path>",
             "description": "Raw current content of a workspace document. Doc links in bundles point here.",
-            "params": {}, "example": f"{base}/api/instance/v2-environmental/file/CLAUDE.md",
+            "params": {}, "example": f"{base}/api/instance/v2-environmental/file/AGENTS.md",
         },
         {
             "method": "GET", "path": "/api/instance/<id>/session/<session_id>/research",

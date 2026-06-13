@@ -48,7 +48,13 @@
           <input type="password" name="password" placeholder="control password" autocomplete="off">
           <button type="submit">{{ 'Resume' if paused else 'Pause' }}</button>
         </form>
-        {% if control_msg and not paused %}<div class="small" style="margin-top:6px;">{{ control_msg }}</div>{% endif %}
+        {% if control_msg %}
+          {% if control_msg_always_show %}
+            <div class="small" style="margin-top:6px;{% if control_msg_is_error %}color:var(--bad);{% endif %}">{{ control_msg }}</div>
+          {% elif not paused %}
+            <div class="small" style="margin-top:6px;">{{ control_msg }}</div>
+          {% endif %}
+        {% endif %}
       {% endif %}
 
       {% if next_fire_epoch_ms %}
@@ -135,12 +141,14 @@
     <h2>v2 wakefulness <span class="small">(impulse-to-leave &amp; memory measurement)</span></h2>
 
     {% if v2_config %}
+      <div style="margin-bottom: 4px;">
+        <code style="font-size: 13px; color: var(--accent); font-weight: 600;">{{ v2_config.model or '—' }}</code>
+      </div>
       <div class="ts" style="margin-bottom: 8px;">
         config:
         min_wake {{ v2_config.min_wake_hours if v2_config.min_wake_hours is not none else '—' }}h
         · decay {{ v2_config.decay_hours if v2_config.decay_hours is not none else '—' }}h
         · tick {{ v2_config.tick_interval_seconds if v2_config.tick_interval_seconds is not none else '—' }}s
-        · model {{ v2_config.model or '—' }}
       </div>
     {% endif %}
 
@@ -215,12 +223,14 @@
     <h2>v3 circadian <span class="small">(environmental wind-down &amp; would-end-now measurement)</span></h2>
 
     {% if v3_config %}
+      <div style="margin-bottom: 4px;">
+        <code style="font-size: 13px; color: var(--accent); font-weight: 600;">{{ v3_config.model or '—' }}</code>
+      </div>
       <div class="ts" style="margin-bottom: 8px;">
         config:
         wind-down {{ v3_config.wind_down_hours if v3_config.wind_down_hours is not none else '—' }}h
         · decay {{ v3_config.decay_hours if v3_config.decay_hours is not none else '—' }}h
         · tick {{ v3_config.tick_interval_seconds if v3_config.tick_interval_seconds is not none else '—' }}s
-        · model {{ v3_config.model or '—' }}
         <br><span class="small">awake length is set by the environment (~120m); the agent has no end control. would_end_now is logged only.</span>
       </div>
     {% endif %}
@@ -346,12 +356,14 @@
     <h2>v4 continuous <span class="small">(system-owned wind-down &amp; adaptive cadence; agent has no end/schedule control)</span></h2>
 
     {% if v4_config %}
+      <div style="margin-bottom: 4px;">
+        <code style="font-size: 13px; color: var(--accent); font-weight: 600;">{{ v4_config.model or '—' }}</code>
+      </div>
       <div class="ts" style="margin-bottom: 8px;">
         config:
         decay {{ v4_config.decay_hours if v4_config.decay_hours is not none else '—' }}h
         · cadence {{ v4_config.cadence_active_gap_seconds if v4_config.cadence_active_gap_seconds is not none else '—' }}s active
         / {{ v4_config.cadence_idle_base_seconds if v4_config.cadence_idle_base_seconds is not none else '—' }}–{{ v4_config.cadence_idle_ceil_seconds if v4_config.cadence_idle_ceil_seconds is not none else '—' }}s idle
-        · model {{ v4_config.model or '—' }}
         <br><span class="small">awake length is set by the environment (~120m); the agent has no end or schedule control. the cadence rule is environmental and never disclosed to the agent.</span>
       </div>
     {% endif %}

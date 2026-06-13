@@ -189,6 +189,7 @@ def _run(*, instance, episodic, research_store, anthropic_client, agent_root, se
             logger.exception("cumulative: cost logging failed (non-fatal)")
 
     program_context = _load_program_context(agent_root, cfg)
+    agent_model: str | None = getattr(instance, "model", None)
     binding_notes = [n for n in research_store.recent_notes(n=100000)
                      if n.get("coding_status") == "binding"]
     note_summaries = _note_summaries(binding_notes or research_store.recent_notes(n=100000))
@@ -203,7 +204,7 @@ def _run(*, instance, episodic, research_store, anthropic_client, agent_root, se
             prov = provider_for(seat.get("provider", "anthropic"))
             resp = prov.complete(
                 system=build_synth_lens_system(seat["lens"]),
-                prompt=build_synth_lens_prompt(matrix, note_summaries, program_context),
+                prompt=build_synth_lens_prompt(matrix, note_summaries, program_context, agent_model=agent_model),
                 model=seat.get("model", "claude-sonnet-4-6"), max_tokens=max_tokens,
             )
             account(resp, f"lens:{seat['lens']}")
@@ -240,7 +241,7 @@ def _run(*, instance, episodic, research_store, anthropic_client, agent_root, se
             prov = provider_for(lenses[0].get("provider", "anthropic"))
             resp = prov.complete(
                 system=build_cumulative_chair_system(),
-                prompt=build_cumulative_chair_prompt(matrix, drafts, critique, program_context),
+                prompt=build_cumulative_chair_prompt(matrix, drafts, critique, program_context, agent_model=agent_model),
                 model=lenses[0].get("model", "claude-sonnet-4-6"),
                 max_tokens=max(max_tokens, _CHAIR_MIN_TOKENS),
             )

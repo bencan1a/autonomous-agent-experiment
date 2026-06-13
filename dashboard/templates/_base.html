@@ -71,6 +71,35 @@
   }
   header .instance-bar .cost { color: var(--muted); }
   header .instance-bar .cost .num { color: var(--accent); font-weight: 600; }
+  /* "New instance" clone panel — floats below the instance bar. */
+  .new-instance-wrap { position: relative; }
+  #new-instance-panel {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 6px;
+    z-index: 50;
+    min-width: 320px;
+    background: var(--panel, #161b22);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  }
+  #new-instance-panel.open { display: block; }
+  #new-instance-panel .np-title { font-weight: 600; margin-bottom: 8px; }
+  #new-instance-panel label { display: block; margin: 8px 0 2px; color: var(--muted); }
+  #new-instance-panel input[type=text],
+  #new-instance-panel input[type=password],
+  #new-instance-panel select {
+    width: 100%;
+    font-size: 12px;
+    padding: 4px 6px;
+    box-sizing: border-box;
+  }
+  #new-instance-panel .np-hint { color: var(--muted); margin: 8px 0 0; }
+  #new-instance-panel .np-actions { margin-top: 10px; display: flex; gap: 8px; }
   main {
     padding: 16px 24px;
     display: grid;
@@ -486,21 +515,25 @@
     <a href="{{ url_for('workspace_index') }}{{ iq }}">workspace</a>
     <a href="{{ url_for('actions_log') }}{{ iq }}">actions</a>
     <a href="{{ url_for('subagents_log') }}{{ iq }}">subagents</a>
-    <a href="{{ url_for('claude_md_view') }}{{ iq }}">CLAUDE.md</a>
+    <a href="{{ url_for('claude_md_view') }}{{ iq }}">AGENTS.md</a>
     <a href="{{ url_for('prompt_view') }}{{ iq }}">prompt</a>
   </nav>
   {% if instances %}
+  <div class="new-instance-wrap">
   <form class="instance-bar" method="get" action="{{ request.path }}">
     <label for="instance-select" class="small">instance:</label>
-    <select id="instance-select" name="instance" onchange="this.form.submit()">
+    <select id="instance-select" name="instance" data-current="{{ selected_instance.id if selected_instance else '' }}" onchange="onInstanceSelect(this)">
       {% for inst in instances %}
         <option value="{{ inst.id }}"
           {% if selected_instance and inst.id == selected_instance.id %}selected{% endif %}>
           {{ inst.name }}{% if inst.branch_label %} [branch {{ inst.branch_label }}]{% endif %} ({{ inst.status }}){% if inst.active %} ★{% endif %}
         </option>
       {% endfor %}
+      {% if selected_instance %}
+        <option value="__new__">＋ New instance…</option>
+      {% endif %}
     </select>
-    {# Dropdown auto-submits on change; no separate submit button. #}
+    {# Dropdown auto-submits on change; the "+ New instance…" item opens a panel instead. #}
     {% if selected_instance %}
       {% set ist = selected_instance.status %}
       {% if ist == 'active' %}
@@ -518,6 +551,31 @@
       <span class="cost">cost <span class="num">${{ '%.2f'|format(instance_cost_total or 0.0) }}</span></span>
     {% endif %}
   </form>
+  {% if selected_instance %}
+    {# Clone-current-config-onto-a-different-model panel (opened by the
+       "+ New instance…" dropdown item). New instance starts paused/empty. #}
+    <div id="new-instance-panel">
+      <div class="np-title">New instance — clone “{{ selected_instance.name }}” ({{ selected_instance.version }})</div>
+      <form method="POST" action="{{ url_for('create_instance', instance=selected_instance.id) }}" autocomplete="off">
+        <label for="ni-name">name</label>
+        <input type="text" id="ni-name" name="name" value="{{ selected_instance.name }} ({{ selected_instance.version }})" required>
+        <label for="ni-model">model</label>
+        <select id="ni-model" name="model">
+          {% for slug, label in candidate_models %}
+            <option value="{{ slug }}" {% if slug == current_model %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <label for="ni-pass">control password</label>
+        <input type="password" id="ni-pass" name="password" placeholder="control password">
+        <div class="np-hint small">Clones config (version, budgets, schedule, research panel) onto the chosen model. Starts with empty memory/workspace, paused — activate it afterward.</div>
+        <div class="np-actions">
+          <button type="submit" class="pill-btn">Create</button>
+          <button type="button" class="pill-btn" onclick="closeNewInstance()" style="background:transparent;color:var(--muted);border-color:var(--border);">Cancel</button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+  </div>
   {% endif %}
   <div class="meta">
     {% if status %}
@@ -542,6 +600,31 @@
   {% block main %}{% endblock %}
 </main>
 
+<script>
+/* "New instance" clone panel: the instance dropdown's last item ("+ New
+   instance…") opens the panel instead of navigating; any real instance still
+   auto-submits the GET form. Plain switching works without this script too —
+   only the new-instance affordance (which opens a panel) needs JS. */
+function onInstanceSelect(sel) {
+  if (sel.value === "__new__") {
+    sel.value = sel.getAttribute("data-current") || "";  // restore selection
+    openNewInstance();
+  } else {
+    sel.form.submit();
+  }
+}
+function openNewInstance() {
+  var p = document.getElementById("new-instance-panel");
+  if (!p) return;
+  p.classList.add("open");
+  var n = document.getElementById("ni-name");
+  if (n) { n.focus(); n.select(); }
+}
+function closeNewInstance() {
+  var p = document.getElementById("new-instance-panel");
+  if (p) p.classList.remove("open");
+}
+</script>
 <script>
 /* Make data tables card-stackable on narrow viewports: copy each column
    header into its cells' data-label and tag the table `stack`. The CSS

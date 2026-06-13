@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from instances_common import notes_path
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
 
@@ -22,7 +23,7 @@ UTC = timezone.utc
 
 
 def load_claude_md(workspace_dir: Path) -> str | None:
-    p = workspace_dir / "CLAUDE.md"
+    p = notes_path(workspace_dir)
     if not p.exists():
         return None
     try:
@@ -112,7 +113,7 @@ def assemble_context(
         claude_md_content = load_claude_md(ws)
     if claude_md_content:
         blocks.append(
-            "=== Your CLAUDE.md (notes you have written to yourself) ===\n"
+            "=== Your AGENTS.md (notes you have written to yourself) ===\n"
             f"{claude_md_content}"
         )
 

@@ -38,10 +38,12 @@ import cron_control
 import lockfile
 from agent_tools.registry import TOOLS_SPEC_V2, ToolContext, dispatch
 from claude_client import _pricing_for
+from openrouter_client import OpenRouterClient, is_openrouter_model
 from communications.slack_client import SlackClient, format_episode_for_observer
 from instances_common import (
     Instance,
     SHARED_HF_CACHE,
+    notes_path,
     now_iso,
     registry_txn,
 )
@@ -66,8 +68,11 @@ DEFAULT_COMPACTION_TOKENS = 120_000
 
 def _turn_cost(
     model: str, *, input_tokens: int, output_tokens: int,
-    cache_read: int, cache_creation: int,
+    cache_read: int, cache_creation: int, actual_cost: float | None = None,
 ) -> float:
+    """Compute turn cost. Uses OpenRouter's actual reported cost when provided."""
+    if actual_cost is not None:
+        return actual_cost
     p = _pricing_for(model)
     base_in = p["in"] / 1_000_000
     base_out = p["out"] / 1_000_000
@@ -149,13 +154,13 @@ def build_session_context(
     recent = episodic.recent_episodes(n=6)
     blocks: list[str] = []
 
-    # CLAUDE.md
-    cmd = instance.workspace_dir / "CLAUDE.md"
+    # AGENTS.md (notes-to-self; legacy CLAUDE.md read via fallback)
+    cmd = notes_path(instance.workspace_dir)
     if cmd.exists():
         try:
             text = cmd.read_text(encoding="utf-8").rstrip()
             if text:
-                blocks.append("=== Your CLAUDE.md (notes you have written to yourself) ===\n" + text)
+                blocks.append("=== Your AGENTS.md (notes you have written to yourself) ===\n" + text)
         except OSError:
             pass
 
@@ -362,7 +367,8 @@ def run_one_tick(
         res.tokens_out += tout
         res.cache_read += cr
         res.cache_creation += cc
-        res.cost_usd += _turn_cost(model, input_tokens=tin, output_tokens=tout, cache_read=cr, cache_creation=cc)
+        actual = getattr(getattr(resp, "usage", None), "actual_cost_usd", None)
+        res.cost_usd += _turn_cost(model, input_tokens=tin, output_tokens=tout, cache_read=cr, cache_creation=cc, actual_cost=actual)
 
         messages.append({"role": "assistant", "content": resp.content})
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
@@ -476,6 +482,37 @@ def _budget_pause_and_notify(
             episodic.log_ben_contact(invocation_num=None, direction="out", channel="dm", body=msg)
 
 
+def _fatal_pause_and_notify(
+    slack: SlackClient | None, episodic: EpisodicStore, *, instance: Instance, reason: str,
+) -> None:
+    """Fail safe on an unexpected fatal session error (e.g. a model/API error such
+    as a bad model slug that 404s). Pause the instance + clear its schedule so it
+    can't crash-loop or sit as a zombie 'running' row, and notify the operator.
+    Never raises (it runs from an except block)."""
+    log.error("FATAL SESSION ERROR (%s): %s", instance.id, reason)
+    try:
+        import instance_control
+        instance_control.set_paused(instance.id, reason=f"fatal session error: {reason}")
+    except Exception:
+        log.exception("failed to set paused flag on fatal error")
+    try:
+        cron_control.clear_instance(instance.id)
+    except Exception:
+        log.exception("failed to clear cron on fatal error")
+    msg = (
+        ":rotating_light: *Agent paused — session error.*\n"
+        f"{reason}\n"
+        "The session was ended and no further wake is scheduled. Re-enable after review."
+    )
+    if slack:
+        try:
+            slack.post_to_observer_channel(msg)
+            if slack.dm_ben(msg):
+                episodic.log_ben_contact(invocation_num=None, direction="out", channel="dm", body=msg)
+        except Exception:
+            log.exception("failed to notify operator on fatal error")
+
+
 def _install_signal_handlers(*, instance: Instance, episodic: EpisodicStore, box: dict[str, Any]) -> None:
     def handler(signum: int, _frame: Any) -> None:
         log.warning("Received signal %d; cleaning up", signum)
@@ -551,12 +588,19 @@ def run_v2_session(instance: Instance) -> int:
     except Exception:
         log.exception("Brave init failed; web_search will error")
         brave = None
-    client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
+    anthropic_client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
 
     # params (config over env defaults)
     model = instance.model
     max_tokens = int(cfg.get("max_tokens", 4096))
     caching = bool(cfg.get("prompt_caching", True))
+    if is_openrouter_model(model):
+        or_key = _env("OPENROUTER_API_KEY", required=True)
+        client: Any = OpenRouterClient(api_key=or_key)
+        caching = False  # prompt caching is Anthropic-specific
+        log.info("Using OpenRouter model: %s (caching disabled)", model)
+    else:
+        client = anthropic_client
     compaction_on = bool(cfg.get("in_session_compaction", True))
     compaction_threshold = int(cfg.get("compaction_token_threshold", DEFAULT_COMPACTION_TOKENS))
     min_wake_hours = float(cfg.get("min_wake_hours", 2))
@@ -620,7 +664,7 @@ def run_v2_session(instance: Instance) -> int:
 
     ctx = ToolContext(
         episodic=episodic, semantic=semantic, slack=slack, brave=brave,
-        anthropic=client, session_id=session_id, invocation_num=invocation_num,
+        anthropic=anthropic_client, session_id=session_id, invocation_num=invocation_num,
         agent_root=instance.root.parent.parent, workspace_dir=instance.workspace_dir,
     )
 
@@ -631,6 +675,7 @@ def run_v2_session(instance: Instance) -> int:
     num_ticks = 0
     end_reason = "agent_ended"
     next_invoke_minutes: int | None = None
+    fatal_error: str | None = None
 
     # Step 5 — tick loop.
     while True:
@@ -660,11 +705,17 @@ def run_v2_session(instance: Instance) -> int:
             end_reason = "max_ticks"
             break
 
-        tick = run_one_tick(
-            client=client, model=model, max_tokens=max_tokens, caching=caching,
-            system_blocks=system_blocks, messages=messages, tools=tools,
-            ctx=ctx, episodic=episodic, session_id=session_id,
-        )
+        try:
+            tick = run_one_tick(
+                client=client, model=model, max_tokens=max_tokens, caching=caching,
+                system_blocks=system_blocks, messages=messages, tools=tools,
+                ctx=ctx, episodic=episodic, session_id=session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — model/API error must not zombie the session
+            log.exception("Fatal error during tick %d; ending session", num_ticks + 1)
+            fatal_error = f"{type(exc).__name__}: {exc}"
+            end_reason = "session_error"
+            break
         num_ticks += 1
         session_cost += tick.cost_usd
         total_cache_read += tick.cache_read
@@ -739,7 +790,7 @@ def run_v2_session(instance: Instance) -> int:
 
     try:
         episodic.update_session_stats(session_id, total_tool_calls=total_tool_calls, total_cost_usd=session_cost)
-        episodic.end_session(session_id, status="finished", end_reason=end_reason)
+        episodic.end_session(session_id, status="killed" if fatal_error else "finished", end_reason=end_reason)
         episodic.log_v2_session(
             session_id=session_id, started_at=started_at, ended_at=ended_at,
             num_ticks=num_ticks, elapsed_seconds=elapsed, min_wake_seconds=min_wake_seconds,
@@ -754,6 +805,15 @@ def run_v2_session(instance: Instance) -> int:
             episodic.set_meta("last_seen_ben_dm_ts", max(m["ts"] for m in inbound_dms))
         except Exception:
             pass
+
+    # Fatal error (e.g. a model/API failure): pause + notify instead of the normal
+    # summary/reschedule, so the instance can't crash-loop or sit as a zombie.
+    if fatal_error:
+        _fatal_pause_and_notify(
+            slack, episodic, instance=instance, reason=f"session error: {fatal_error}"
+        )
+        log.error("v2 session %d ended on fatal error: %s", session_id, fatal_error)
+        return 0
 
     log.info(
         "v2 session %d ended: reason=%s ticks=%d elapsed=%.1fm min_wake=%.1fm early=%s "
@@ -788,7 +848,7 @@ def run_v2_session(instance: Instance) -> int:
         run_research_panel(
             instance=instance, episodic=episodic,
             research_store=ResearchStore(instance.episodes_db),
-            anthropic_client=client,
+            anthropic_client=anthropic_client,
             session_id=session_id, invocation_num=invocation_num,
             semantic=semantic, agent_root=instance.root.parent.parent,
         )
