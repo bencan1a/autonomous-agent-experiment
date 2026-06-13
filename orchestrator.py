@@ -52,7 +52,7 @@ logging.basicConfig(
 log = logging.getLogger("orchestrator")
 
 from agent_tools.registry import TOOLS_SPEC, ToolContext, dispatch  # noqa: E402
-from claude_client import _pricing_for, estimate_cost  # noqa: E402
+from claude_client import _pricing_for  # noqa: E402
 from communications.slack_client import (  # noqa: E402
     SlackClient,
     format_episode_for_observer,
@@ -159,12 +159,6 @@ def _turn_cost(
         + output_tokens * base_out
         + cache_read * base_in * 0.1
         + cache_creation * base_in * 1.25
-    )
-
-
-def _extract_text(content_blocks: list[Any]) -> str:
-    return "".join(
-        b.text for b in content_blocks if getattr(b, "type", None) == "text"
     )
 
 

@@ -6,7 +6,6 @@ Embeds each episode's summary text. Retrieval is k-NN over the focus query.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 

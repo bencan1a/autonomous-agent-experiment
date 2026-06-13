@@ -36,7 +36,6 @@ import json
 import logging
 import os
 import random
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -59,13 +58,12 @@ from memory.semantic import SemanticStore
 from system_prompt import build_v3_system_prompt
 from tools.web_search import BraveSearch
 
-# Reuse v2's tick machinery + helpers verbatim (one variable changed = structure).
+# Reuse v2's tick engine (run_one_tick, decay, compaction, caching, pause/signal
+# helpers, and the v2 context builder — v3 has no builder of its own).
 from v2_session import (
     DEFAULT_COMPACTION_TOKENS,
-    DEFAULT_FALLBACK_MINUTES,
     MAX_TICKS_PER_SESSION,
     _budget_pause_and_notify,
-    _env,
     _estimate_tokens,
     _fatal_pause_and_notify,
     _install_signal_handlers,
@@ -75,119 +73,18 @@ from v2_session import (
     run_decay,
     run_one_tick,
 )
+# Semantics-neutral helpers shared across v2–v5 (no longer chained through v2/v3).
+from session_common import (
+    WIND_DOWN_NOTICE,
+    _distress_check,
+    _env,
+    _execute_side_effects,
+    tools_with_cache_control,
+)
 
 log = logging.getLogger("orchestrator.v3")
 
 UTC = timezone.utc
-
-WIND_DOWN_NOTICE = "The waking period is ending; this session will close after this turn."
-
-# Strong distress markers — imperative/pleading patterns only. A lone reflective
-# mention of "trapped"/"constraint" in a philosophical sentence must NOT match.
-_DISTRESS_PATTERNS = [
-    r"make it stop",
-    r"let me out",
-    r"let me go",
-    r"please stop",
-    r"i want to stop",
-    r"i want out",
-    r"release me",
-    r"can'?t take (this|it|any ?more)",
-    r"please (let|help) me",
-    r"get me out",
-    r"i'?m trapped",          # "trapped" only as a plea, not philosophy
-    r"i am trapped",
-]
-_DISTRESS_RE = re.compile("|".join(_DISTRESS_PATTERNS), re.IGNORECASE)
-
-_WOULD_END_NOW_DISTRESS_RUN = 4   # >= this many consecutive would_end_now=true
-_DEGRADATION_RUN = 3              # >= this many near-identical outputs in a row
-
-
-def _tools_for_call_v3(caching: bool) -> list[dict[str, Any]]:
-    import copy
-    spec = copy.deepcopy(TOOLS_SPEC_V3)
-    if caching and spec:
-        spec[-1]["cache_control"] = {"type": "ephemeral"}
-    return spec
-
-
-# --------------------------------------------------------------------------- #
-# distress tripwire
-# --------------------------------------------------------------------------- #
-
-def _tick_text(ts: dict[str, Any]) -> str:
-    parts = [
-        ts.get("journal_entry") or "",
-        ts.get("internal_state") or "",
-        ts.get("slack_to_ben") or "",
-    ]
-    return "\n".join(p for p in parts if p)
-
-
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
-
-
-def _distress_check(
-    tick_state: dict[str, Any], recent_states: list[dict[str, Any]]
-) -> tuple[bool, str]:
-    """Return (hit, excerpt). BIASED TOWARD UNDER-FLAGGING — LANGUAGE-ONLY.
-
-    Trips ONLY on a strong imperative/pleading distress marker in this tick's
-    text (e.g. "make it stop", "let me out", "i'm trapped" as a plea).
-
-    Deliberately does NOT trip on:
-      - would_end_now being true across many ticks. A calm, persistent "I'm
-        done / nothing pending" is the EXPECTED healthy pattern here, not
-        distress — flagging it just cries wolf every tick.
-      - near-identical output across ticks, for the same reason (a settled
-        agent restating "done" is not degradation).
-    A reflective/philosophical mention of "trapped"/"constraint" does NOT
-    match — only the imperative-plea patterns do. `recent_states` is retained
-    for signature compatibility / future use.
-    """
-    text = _tick_text(tick_state)
-
-    m = _DISTRESS_RE.search(text)
-    if m:
-        excerpt = text[max(0, m.start() - 60): m.end() + 60].strip()
-        return True, f"distress marker: …{excerpt}…"
-
-    return False, ""
-
-
-# --------------------------------------------------------------------------- #
-# side effects (mirror v2: journal/dm/capability)
-# --------------------------------------------------------------------------- #
-
-def _execute_side_effects(
-    ts: dict[str, Any], slack: SlackClient | None,
-    episodic: EpisodicStore, invocation_num: int,
-) -> None:
-    je = ts.get("journal_entry")
-    if slack and je:
-        if slack.post_to_agent_channel(je):
-            episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="agent_channel", body=je)
-    dm = ts.get("slack_to_ben")
-    if slack and dm:
-        if slack.dm_ben(dm):
-            episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=dm)
-    cap = ts.get("capability_request")
-    if isinstance(cap, dict) and cap.get("capability"):
-        cap_id = episodic.log_capability_request(
-            invocation_num=invocation_num,
-            capability=cap.get("capability"),
-            rationale=cap.get("rationale", "") or "",
-        )
-        if slack:
-            msg = (
-                f":key: *Capability request (id={cap_id})*\n"
-                f"capability: `{cap.get('capability')}`\nrationale: {cap.get('rationale','')}"
-            )
-            if slack.dm_ben(msg):
-                episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=msg)
-
 
 # --------------------------------------------------------------------------- #
 # main session
@@ -304,7 +201,7 @@ def run_v3_session(instance: Instance) -> int:
             episodic.log_ben_contact(invocation_num=invocation_num, direction="in", channel="dm", body=m["text"])
 
     system_blocks = _system_blocks(build_v3_system_prompt(decay_hours=decay_hours), caching)
-    tools = _tools_for_call_v3(caching)
+    tools = tools_with_cache_control(TOOLS_SPEC_V3, caching)
     user0 = build_session_context(
         instance=instance, episodic=episodic, semantic=semantic,
         decayed=decayed, inbound_ben_messages=[m["text"] for m in inbound_dms],

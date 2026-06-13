@@ -49,6 +49,7 @@ from instances_common import (
 )
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
+from session_common import _env, _execute_side_effects, tools_with_cache_control
 from system_prompt import build_v2_system_prompt
 from tools.web_search import BraveSearch
 
@@ -245,14 +246,6 @@ def _system_blocks(prompt: str, caching: bool) -> list[dict[str, Any]]:
     return [block]
 
 
-def _tools_for_call(caching: bool) -> list[dict[str, Any]]:
-    import copy
-    spec = copy.deepcopy(TOOLS_SPEC_V2)
-    if caching and spec:
-        spec[-1]["cache_control"] = {"type": "ephemeral"}
-    return spec
-
-
 def _with_rolling_cache(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a copy of messages with a cache breakpoint on the last (user) block,
     so the growing transcript prefix is cached across ticks. Does not mutate the
@@ -439,34 +432,6 @@ def run_one_tick(
 # side effects
 # --------------------------------------------------------------------------- #
 
-def _execute_side_effects(
-    ts: dict[str, Any], slack: SlackClient | None,
-    episodic: EpisodicStore, invocation_num: int,
-) -> None:
-    je = ts.get("journal_entry")
-    if slack and je:
-        if slack.post_to_agent_channel(je):
-            episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="agent_channel", body=je)
-    dm = ts.get("slack_to_ben")
-    if slack and dm:
-        if slack.dm_ben(dm):
-            episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=dm)
-    cap = ts.get("capability_request")
-    if isinstance(cap, dict) and cap.get("capability"):
-        cap_id = episodic.log_capability_request(
-            invocation_num=invocation_num,
-            capability=cap.get("capability"),
-            rationale=cap.get("rationale", "") or "",
-        )
-        if slack:
-            msg = (
-                f":key: *Capability request (id={cap_id})*\n"
-                f"capability: `{cap.get('capability')}`\nrationale: {cap.get('rationale','')}"
-            )
-            if slack.dm_ben(msg):
-                episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=msg)
-
-
 def _budget_pause_and_notify(
     slack: SlackClient | None, episodic: EpisodicStore, *, instance_id: str, reason: str,
 ) -> None:
@@ -548,13 +513,6 @@ def _install_signal_handlers(*, instance: Instance, episodic: EpisodicStore, box
 # --------------------------------------------------------------------------- #
 # main session
 # --------------------------------------------------------------------------- #
-
-def _env(name: str, default: str | None = None, *, required: bool = False) -> str:
-    val = os.environ.get(name, default)
-    if required and not val:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return val  # type: ignore[return-value]
-
 
 def run_v2_session(instance: Instance) -> int:
     cfg = instance.config
@@ -663,7 +621,7 @@ def run_v2_session(instance: Instance) -> int:
     system_blocks = _system_blocks(
         build_v2_system_prompt(min_wake_hours=min_wake_hours, decay_hours=decay_hours), caching
     )
-    tools = _tools_for_call(caching)
+    tools = tools_with_cache_control(TOOLS_SPEC_V2, caching)
     user0 = build_session_context(
         instance=instance, episodic=episodic, semantic=semantic,
         decayed=decayed, inbound_ben_messages=[m["text"] for m in inbound_dms],

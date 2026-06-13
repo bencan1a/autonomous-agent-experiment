@@ -40,9 +40,6 @@ from instances_common import (  # noqa: E402
     list_instances,
     load_instance,
     notes_path,
-    registry_entry,
-    registry_txn,
-    save_config,
 )
 from instance_manager import create_cloned_instance  # noqa: E402
 from system_prompt import SYSTEM_PROMPT  # noqa: E402
@@ -459,10 +456,6 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
 
     events: list[dict] = []
 
-    def _trunc(s: str, n: int = 140) -> str:
-        s = s or ""
-        return s if len(s) <= n else s[:n].rstrip() + "…"
-
     # Determine the invocation of the session that ENDS before each session starts,
     # for attaching sleep events. Build session metadata per session in order.
     session_meta: list[dict] = []
@@ -694,16 +687,6 @@ def _build_invocation_timeline(store, *, invocation=None) -> dict:
     events = events[::-1]
 
     return {"events": events, "invocations": invocations, "selected": selected}
-
-
-def _invocation_to_session(store: EpisodicStore) -> dict[int, int]:
-    """Map invocation_num -> its (earliest) session id."""
-    out: dict[int, int] = {}
-    for s in store.all_sessions():  # ascending by id
-        inv = s.get("invocation_num")
-        if inv is not None and inv not in out:
-            out[inv] = s["id"]
-    return out
 
 
 def _research_context(store: EpisodicStore, selected):
@@ -1774,7 +1757,6 @@ def fmt_bytes(n):
 # =========================================================================== #
 
 import difflib  # noqa: E402
-import re  # noqa: E402
 from flask import Response, jsonify  # noqa: E402
 
 # Stored args_json is capped at ~2000 chars, so a large write_file blob is often

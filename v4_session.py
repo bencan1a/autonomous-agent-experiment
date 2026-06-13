@@ -61,10 +61,8 @@ from tools.web_search import BraveSearch
 # schedule language) — v4 has its own reload builder below.
 from v2_session import (
     DEFAULT_COMPACTION_TOKENS,
-    DEFAULT_FALLBACK_MINUTES,
     MAX_TICKS_PER_SESSION,
     _budget_pause_and_notify,
-    _env,
     _estimate_tokens,
     _fatal_pause_and_notify,
     _fmt_recent_episode,
@@ -74,46 +72,21 @@ from v2_session import (
     run_decay,
     run_one_tick,
 )
-
-# Distress detection is language-only and identical to v3 (already shipped). Reuse it.
-from v3_session import _distress_check, _execute_side_effects
+# Semantics-neutral helpers shared across v2–v5 (no longer chained through v3).
+from session_common import (
+    WIND_DOWN_NOTICE,
+    _distress_check,
+    _env,
+    _execute_side_effects,
+    _turn_is_substantive,
+    tools_with_cache_control,
+)
 
 log = logging.getLogger("orchestrator.v4")
 
 UTC = timezone.utc
 
-# The ONLY non-clock message the loop ever injects. Neutral.
-WIND_DOWN_NOTICE = "The waking period is ending; this session will close after this turn."
-
 MAX_TURNS_PER_SESSION = MAX_TICKS_PER_SESSION  # hard backstop
-
-
-def _tools_for_call_v4(caching: bool) -> list[dict[str, Any]]:
-    import copy
-    spec = copy.deepcopy(TOOLS_SPEC_V4)
-    if caching and spec:
-        spec[-1]["cache_control"] = {"type": "ephemeral"}
-    return spec
-
-
-def _action_name(action: str) -> str:
-    """Strip the trailing ' (N)' count that run_one_tick appends for repeats."""
-    return action.split(" (")[0]
-
-
-def _turn_is_substantive(actions: list[str]) -> bool:
-    """True if any tool that acts on the world ran this turn.
-
-    Substantive = a tool call other than the yield terminator (`pause_turn`).
-    journal_entry / internal_state are NOT tools — they are fields on pause_turn,
-    so they never appear here; only real tool calls (web_search, file ops,
-    spawn_subagent, memory recall, consolidate) do. An idle turn is one whose
-    only tool call was pause_turn.
-    """
-    for a in actions:
-        if _action_name(a) != "pause_turn":
-            return True
-    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -380,7 +353,7 @@ def run_v4_session(instance: Instance) -> int:
     inbound_messages = len(inbound_dms)
 
     system_blocks = _system_blocks(build_v4_system_prompt(decay_hours=decay_hours), caching)
-    tools = _tools_for_call_v4(caching)
+    tools = tools_with_cache_control(TOOLS_SPEC_V4, caching)
     user0 = build_v4_session_context(
         instance=instance, episodic=episodic, semantic=semantic,
         decayed=decayed, inbound_ben_messages=[m["text"] for m in inbound_dms],

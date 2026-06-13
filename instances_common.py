@@ -44,7 +44,6 @@ SHARED_HF_CACHE = AGENT_ROOT / "data" / "hf_cache"
 
 UTC = timezone.utc
 
-VALID_STATUSES = ("active", "paused", "archived")
 VALID_VERSIONS = ("v1", "v2", "v3", "v4", "v5")
 
 # The agent's notes-to-self file. Canonical name is vendor-neutral (the agent may
@@ -435,14 +434,6 @@ def registry_txn():
 
 def registry_entry(registry: dict, instance_id: str) -> dict | None:
     return registry.get("instances", {}).get(instance_id)
-
-
-def active_instance_id(registry: dict | None = None) -> str | None:
-    reg = registry if registry is not None else load_registry()
-    for iid, ent in reg.get("instances", {}).items():
-        if ent.get("status") == "active":
-            return iid
-    return None
 
 
 def active_instance_ids(registry: dict | None = None) -> list[str]:

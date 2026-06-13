@@ -1,21 +1,18 @@
-"""Thin wrapper around the Anthropic SDK with JSON-output parsing and pricing.
+"""Pricing tables + lenient JSON extraction for model responses.
 
-Uses tool_choice-free messages; relies on the prompt asking for valid JSON.
-parse_response is lenient — finds the first {...} block if there's surrounding chatter.
+Despite the historical name, this module is NOT an LLM client — the session loops
+call the Anthropic SDK / OpenRouterClient directly. It is a shared utility:
+per-model pricing (`_pricing_for`, `estimate_cost`) and best-effort JSON extraction
+from a model's text (`_extract_json` — finds the first balanced {...} block even
+amid surrounding chatter). Imported across the session loops, the subagent tool,
+and the research panel.
 """
 
 from __future__ import annotations
 
 import json
-import logging
-import os
 import re
-from dataclasses import dataclass
 from typing import Any
-
-import anthropic
-
-logger = logging.getLogger(__name__)
 
 # Pricing per 1M tokens. Opus 4.x pricing as of 2026-05.
 # Used only for budget tracking; off by a few cents is fine.
@@ -33,18 +30,6 @@ _PRICING_USD_PER_MTOK = {
     "claude-sonnet-4-0": {"in": 3.0, "out": 15.0},
 }
 _DEFAULT_PRICING = {"in": 15.0, "out": 75.0}
-
-
-@dataclass
-class ClaudeResult:
-    text: str
-    parsed: dict[str, Any] | None
-    parse_error: str | None
-    tokens_in: int
-    tokens_out: int
-    cost_usd: float
-    model: str
-    stop_reason: str | None
 
 
 def _pricing_for(model: str) -> dict[str, float]:
@@ -106,58 +91,3 @@ def _extract_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
                 except json.JSONDecodeError as e:
                     return None, f"candidate JSON parse failed: {e}"
     return None, "unbalanced braces"
-
-
-class ClaudeClient:
-    def __init__(self, *, api_key: str, model: str, max_tokens: int = 4096):
-        self.model = model
-        self.max_tokens = max_tokens
-        self._client = anthropic.Anthropic(api_key=api_key)
-
-    def invoke(self, system: str, user: str) -> ClaudeResult:
-        logger.info("Calling %s (in chars: sys=%d, user=%d)", self.model, len(system), len(user))
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        text_parts = [
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        ]
-        text = "".join(text_parts)
-        parsed, err = _extract_json(text)
-        tokens_in = resp.usage.input_tokens
-        tokens_out = resp.usage.output_tokens
-        cost = estimate_cost(self.model, tokens_in, tokens_out)
-        if err:
-            logger.warning("JSON parse failed (%s); raw=%r", err, text[:500])
-        return ClaudeResult(
-            text=text,
-            parsed=parsed,
-            parse_error=err,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=cost,
-            model=self.model,
-            stop_reason=resp.stop_reason,
-        )
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent / ".env")
-    client = ClaudeClient(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7"),
-    )
-    r = client.invoke(
-        system="You are a test. Reply with valid JSON only.",
-        user='Reply with the exact JSON: {"ok": true, "n": 42}',
-    )
-    print("model:", r.model)
-    print("text:", r.text)
-    print("parsed:", r.parsed)
-    print("err:", r.parse_error)
-    print(f"tokens in/out: {r.tokens_in}/{r.tokens_out}  cost: ${r.cost_usd:.6f}")

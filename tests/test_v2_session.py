@@ -21,8 +21,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-# Make the project importable when run as a plain script.
+# Make the project (and this tests dir) importable when run as a plain script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _harness import (  # noqa: E402  shared version-neutral test scaffolding
+    FakeBlock,
+    FakeLockfile,
+    FakeSemantic,
+    RecordingCron,
+    text_resp,
+    tool_resp,
+)
 
 # Dummy env BEFORE importing v2_session (its _env() reads at session run time,
 # but set early to be safe).
@@ -48,45 +58,6 @@ UTC = timezone.utc
 # Fakes
 # --------------------------------------------------------------------------- #
 
-class FakeBlock:
-    def __init__(self, type, text=None, name=None, input=None, id=None):
-        self.type = type
-        self.text = text
-        self.name = name
-        self.input = input
-        self.id = id
-
-
-class FakeUsage:
-    def __init__(self, input_tokens=10, output_tokens=10,
-                 cache_read_input_tokens=0, cache_creation_input_tokens=0):
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
-        self.cache_read_input_tokens = cache_read_input_tokens
-        self.cache_creation_input_tokens = cache_creation_input_tokens
-
-
-class FakeResp:
-    def __init__(self, content, usage=None, stop_reason="end_turn"):
-        self.content = content
-        self.usage = usage or FakeUsage()
-        self.stop_reason = stop_reason
-
-
-def text_resp(text, usage=None):
-    return FakeResp([FakeBlock("text", text=text)], usage=usage,
-                    stop_reason="end_turn")
-
-
-def tool_resp(calls, usage=None):
-    """calls: list of (name, input_dict). Auto-assign ids."""
-    blocks = []
-    for i, (name, inp) in enumerate(calls):
-        blocks.append(FakeBlock("tool_use", name=name, input=inp,
-                                id=f"toolu_{name}_{i}"))
-    return FakeResp(blocks, usage=usage, stop_reason="tool_use")
-
-
 def end_tick_resp(*, end_session=True, next_invoke_minutes=None,
                   tick_focus="done", usage=None, **extra):
     inp = {"tick_focus": tick_focus, "end_session": end_session}
@@ -111,75 +82,6 @@ class FakeAnthropicClient:
 
 def make_fake_anthropic(queue):
     return SimpleNamespace(Anthropic=lambda **kw: FakeAnthropicClient(queue))
-
-
-class FakeSlack:
-    def __init__(self, **kw):
-        self.agent_posts = []
-        self.observer_posts = []
-        self.dms = []
-
-    def post_to_agent_channel(self, text):
-        self.agent_posts.append(text)
-        return True
-
-    def post_to_observer_channel(self, text):
-        self.observer_posts.append(text)
-        return True
-
-    def dm_ben(self, text):
-        self.dms.append(text)
-        return True
-
-    def fetch_dms_from_ben(self, oldest_ts="0"):
-        return []
-
-
-class FakeSemantic:
-    def __init__(self, *a, **kw):
-        self.added = []
-
-    def search(self, *a, **kw):
-        return []
-
-    def add_episode(self, **kw):
-        self.added.append(kw)
-
-    def count(self):
-        return 0
-
-
-class RecordingCron:
-    def __init__(self):
-        self.calls = []
-
-    def remove_instance_entries(self, instance_id):
-        self.calls.append(("remove_instance_entries", instance_id, {}))
-        return 0
-
-    def clear_instance(self, instance_id):
-        self.calls.append(("clear_instance", instance_id, {}))
-
-    def install_instance_one_shot(self, instance_id, minutes_from_now=None):
-        self.calls.append(("install_instance_one_shot", instance_id,
-                           {"minutes_from_now": minutes_from_now}))
-
-    def names(self):
-        return [c[0] for c in self.calls]
-
-    def find(self, name):
-        return [c for c in self.calls if c[0] == name]
-
-
-class FakeLockfile:
-    def acquire(self, path):
-        return True
-
-    def release(self, path):
-        return None
-
-    def read_pid(self, path):
-        return None
 
 
 # --------------------------------------------------------------------------- #

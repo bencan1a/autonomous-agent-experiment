@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 AGENT_ROOT = Path(__file__).resolve().parent
 TAG_PREFIX = "# agent-instance:"
-LEGACY_MARKER = "# AGENT_ORCHESTRATOR"  # flat-layout v1 entry (pre-migration)
 MIN_INTERVAL_MINUTES = 30
 
 # Serializes every crontab read-modify-write. With fork branches running
@@ -179,22 +178,6 @@ def next_fire_at(instance_id: str) -> datetime | None:
         if target >= now:
             return target
     return None
-
-
-# --------------------------------------------------------------------------- #
-# legacy (pre-migration) cleanup
-# --------------------------------------------------------------------------- #
-
-def remove_legacy_orchestrator_entries() -> int:
-    """Remove the old flat-layout '# AGENT_ORCHESTRATOR' (trailing-marker) line."""
-    with file_lock(CRONTAB_LOCK):
-        lines = _read_crontab()
-        kept = [ln for ln in lines if LEGACY_MARKER not in ln]
-        removed = len(lines) - len(kept)
-        if removed:
-            _write_crontab(kept)
-            logger.info("Removed %d legacy orchestrator cron line(s)", removed)
-    return removed
 
 
 if __name__ == "__main__":

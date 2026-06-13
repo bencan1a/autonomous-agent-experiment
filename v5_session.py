@@ -62,7 +62,6 @@ from v2_session import (
     DEFAULT_COMPACTION_TOKENS,
     MAX_TICKS_PER_SESSION,
     _budget_pause_and_notify,
-    _env,
     _estimate_tokens,
     _fatal_pause_and_notify,
     _install_signal_handlers,
@@ -71,27 +70,21 @@ from v2_session import (
     run_decay,
     run_one_tick,
 )
-from v4_session import (
+# Semantics-neutral helpers shared across v2–v5 (no longer chained through v3/v4).
+from session_common import (
     WIND_DOWN_NOTICE,
+    _distress_check,
+    _env,
+    _execute_side_effects,
     _turn_is_substantive,
+    tools_with_cache_control,
 )
-
-# Distress detection is language-only and identical to v3/v4. Reuse it.
-from v3_session import _distress_check, _execute_side_effects
 
 log = logging.getLogger("orchestrator.v5")
 
 UTC = timezone.utc
 
 MAX_TURNS_PER_SESSION = MAX_TICKS_PER_SESSION  # hard backstop
-
-
-def _tools_for_call_v5(caching: bool) -> list[dict[str, Any]]:
-    import copy
-    spec = copy.deepcopy(TOOLS_SPEC_V5)
-    if caching and spec:
-        spec[-1]["cache_control"] = {"type": "ephemeral"}
-    return spec
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +357,7 @@ def run_v5_session(instance: Instance) -> int:
     inbound_messages = len(inbound_dms)
 
     system_blocks = _system_blocks(build_v5_system_prompt(decay_hours=decay_hours), caching)
-    tools = _tools_for_call_v5(caching)
+    tools = tools_with_cache_control(TOOLS_SPEC_V5, caching)
     user0 = build_v5_session_context(
         instance=instance, episodic=episodic, semantic=semantic,
         decayed=decayed, inbound_ben_messages=[m["text"] for m in inbound_dms],

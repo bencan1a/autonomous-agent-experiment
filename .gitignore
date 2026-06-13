@@ -32,3 +32,6 @@ agent_backups/
 *.swp
 .idea/
 .vscode/
+
+# --- Claude Code: machine-local settings + transient worktrees (never commit) ---
+.claude/
