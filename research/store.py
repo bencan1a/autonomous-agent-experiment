@@ -397,6 +397,25 @@ class ResearchStore:
         d["note"] = _loads(d.get("note_json"))
         return d
 
+    def note_for_invocation(self, invocation_num: int) -> dict[str, Any] | None:
+        """The research note for an invocation, keyed directly by invocation_num.
+
+        Preferred over session-id mapping for display: an invocation can span more
+        than one session row (e.g. a killed session that logged no episodes left
+        the invocation number free for the retry), and the note lives on whichever
+        session actually ran. Returns the most recent note if several exist."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_notes WHERE invocation_num = ? "
+                "ORDER BY session_id DESC LIMIT 1",
+                (invocation_num,),
+            ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["note"] = _loads(d.get("note_json"))
+        return d
+
     def mark_note_embedded(self, note_id: int) -> None:
         with self._conn() as conn:
             conn.execute(

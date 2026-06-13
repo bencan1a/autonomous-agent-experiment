@@ -727,10 +727,12 @@ def _research_context(store: EpisodicStore, selected):
     note = None
     inv = None
     if isinstance(selected, int):
-        sid = _invocation_to_session(store).get(selected)
-        if sid is not None:
-            note = rs.note_for_session(sid)
-            inv = selected
+        # Key the note by invocation_num directly. Mapping invocation -> session id
+        # breaks when an invocation has more than one session row (e.g. a killed
+        # session that logged no episodes, so the retry reused the number): the
+        # note lives on the session that actually ran, not the earliest one.
+        note = rs.note_for_invocation(selected)
+        inv = selected
     notes = [_attach(note)] if note else []
     return notes, False, inv, total
 
