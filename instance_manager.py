@@ -481,8 +481,9 @@ def _fork_slack(parent: Instance, child_id: str, *, private: bool, include_mirro
 
 def _rollback_instance(child_id: str, channels: dict | None = None) -> None:
     """Undo a partial ``create_cloned_instance``: archive any provisioned channels,
-    delete the instance dir, drop the registry entry. Best-effort; never raises
-    (so it is safe to call from an ``except`` block)."""
+    delete the instance dir, the cloned experiment spec, and drop the registry
+    entry. Best-effort; never raises (so it is safe to call from an ``except``
+    block)."""
     if channels:
         ids = [
             channels.get(k) for k in
@@ -500,6 +501,10 @@ def _rollback_instance(child_id: str, channels: dict | None = None) -> None:
                       f"'{child_id}'", file=sys.stderr)
     try:
         shutil.rmtree(instance_dir(child_id), ignore_errors=True)
+    except Exception:
+        pass
+    try:
+        (AGENT_ROOT / "experiments" / f"{child_id}.md").unlink(missing_ok=True)
     except Exception:
         pass
     try:
@@ -536,6 +541,52 @@ def _validate_model_available(model: str) -> None:
         )
 
 
+def _clone_approved_prereg(parent: Instance, child_id: str) -> bool:
+    """Copy the parent's APPROVED coding scheme (``research_prereg``) into the
+    child's DB, re-keyed to the child's ``spec_hash`` and pre-approved, so both
+    instances measure with the identical, already-approved instrument (the
+    cross-model comparison is then model-only, not model + rubric).
+
+    Returns False (a clean no-op) if the parent has no approved prereg, or either
+    side lacks a formal spec on file — in that case the clone operationalizes and
+    approves its own scheme later, as before. Note: the child's ``spec_hash``
+    differs from the parent's (the rewritten ``experiment_id`` is inside the hashed
+    block), so the row must be re-keyed for the panel to reuse it.
+    """
+    from research.spec import load_spec
+    from research.store import ResearchStore
+
+    parent_spec = load_spec(AGENT_ROOT, parent.id)
+    if parent_spec is None:
+        return False
+    psrc = ResearchStore(parent.episodes_db)
+    prereg = psrc.get_prereg(parent.id, parent_spec.spec_hash) or psrc.latest_prereg(parent.id)
+    if not prereg or prereg.get("status") != "approved":
+        return False
+
+    child_spec = load_spec(AGENT_ROOT, child_id)
+    if child_spec is None:
+        return False
+
+    cdst = ResearchStore(load_instance(child_id).episodes_db)
+    cdst.add_prereg(
+        experiment_id=child_id,
+        spec_hash=child_spec.spec_hash,
+        spec_source=str(AGENT_ROOT / "experiments" / f"{child_id}.md"),
+        hypotheses=prereg.get("hypotheses"),
+        ivars=prereg.get("ivars"),
+        dvars=prereg.get("dvars"),
+        controls=prereg.get("controls"),
+        success=prereg.get("success"),
+        stopping=prereg.get("stopping"),
+        code_vocab=prereg.get("code_vocab"),
+        raw_output=prereg.get("raw_output"),
+        model=prereg.get("model"),
+    )
+    cdst.approve_prereg(child_id, child_spec.spec_hash)
+    return True
+
+
 def create_cloned_instance(
     parent: Instance,
     *,
@@ -547,10 +598,13 @@ def create_cloned_instance(
     """Create a NEW, fresh-start instance cloning ``parent``'s config onto ``model``.
 
     Config-only clone: the child inherits the parent's version, budgets, schedule
-    knobs and research-panel config, but starts with EMPTY memory and workspace
-    (no episodes.db / vectors / workspace copy, no ``experiments/<id>.md`` spec).
-    It is registered PAUSED + inactive with no cron entry, so the currently-active
-    instance is never disturbed.
+    knobs, research-panel config, the parent's ``experiments/<id>.md`` spec (so the
+    dashboard shows the same description and the panel uses the same hypotheses),
+    and — when the parent's coding scheme is approved — the parent's APPROVED
+    ``research_prereg`` (so both instances share one identical, pre-approved
+    measurement instrument). It otherwise starts with EMPTY memory and workspace
+    (no episodes.db / vectors / workspace copy). It is registered PAUSED + inactive
+    with no cron entry, so the currently-active instance is never disturbed.
 
     Transactional: validates up front (cheapest failures first, before any artifact
     is created — including that an OpenRouter ``model`` slug is actually served,
@@ -611,10 +665,14 @@ def create_cloned_instance(
             "last_wake": None,
         }
 
-    # Provision Slack (required) OUTSIDE the registry lock; roll back on any failure.
+    # Clone the experiment spec + provision Slack OUTSIDE the registry lock; roll
+    # back everything on any failure. The spec copy rewrites experiment_id to the
+    # child (no-ops cleanly if the parent has no spec on file).
     channels: dict = {}
-    if require_slack:
-        try:
+    try:
+        _write_child_spec(parent.id, child_id, None)
+        _clone_approved_prereg(parent, child_id)  # share the approved instrument
+        if require_slack:
             channels = _provision_and_save(child_id, private=False)
             missing = [
                 k for k in ("notes_channel", "mirror_channel", "chat_channel")
@@ -624,12 +682,11 @@ def create_cloned_instance(
                 raise RuntimeError(
                     f"Slack provisioning returned no id for: {', '.join(missing)}"
                 )
-        except Exception as exc:
-            _rollback_instance(child_id, channels)
-            raise RuntimeError(
-                f"instance creation failed during Slack provisioning and was "
-                f"rolled back: {exc}"
-            ) from exc
+    except Exception as exc:
+        _rollback_instance(child_id, channels)
+        raise RuntimeError(
+            f"instance creation failed and was rolled back: {exc}"
+        ) from exc
 
     return child_id, channels
 

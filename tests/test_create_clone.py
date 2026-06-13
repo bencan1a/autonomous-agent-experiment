@@ -202,11 +202,124 @@ def scenario_invalid_model_rejected():
     return "unavailable OpenRouter slug rejected up front; served slug passes validation"
 
 
+def scenario_spec_cloned():
+    """The parent's experiments/<id>.md (description + hypotheses) is cloned to the
+    child with experiment_id rewritten, so the dashboard shows a description."""
+    with tempfile.TemporaryDirectory() as td:
+        with clone_env(Path(td)) as env:
+            exp_dir = env.tmp / "experiments"
+            exp_dir.mkdir(parents=True, exist_ok=True)
+            (exp_dir / "v4-parent.md").write_text(
+                "# Experiment\n\n## Question / hypothesis\n"
+                "Does the cloned model self-originate?\n\nexperiment_id: v4-parent\n",
+                encoding="utf-8",
+            )
+            parent = _seed_parent()
+            cid, _ = im.create_cloned_instance(
+                parent, name="Spec Clone", model="claude-opus-4-8",
+                require_slack=False, validate_model=False,
+            )
+            child_spec = exp_dir / f"{cid}.md"
+            assert child_spec.exists(), "child experiment spec must be written"
+            txt = child_spec.read_text(encoding="utf-8")
+            assert f"experiment_id: {cid}" in txt, "experiment_id must be rewritten to child"
+            assert "Does the cloned model self-originate?" in txt, "description must carry over"
+    return "parent experiment spec cloned to child with experiment_id rewritten"
+
+
+_FORMAL_SPEC = """# Experiment
+
+## Specification (formal)
+
+```yaml
+spec_version: 1
+experiment_id: v4-parent
+hypotheses:
+  - id: H1
+    statement: Does it self-originate?
+    predicted_evidence: keeps working
+    falsifying_evidence: goes quiescent
+```
+"""
+
+
+def scenario_approved_prereg_cloned():
+    """The parent's APPROVED coding scheme is copied into the child, pre-approved,
+    and re-keyed to the child's (different) spec_hash so the panel reuses it."""
+    from research.spec import load_spec
+    from research.store import ResearchStore
+    with tempfile.TemporaryDirectory() as td:
+        with clone_env(Path(td)) as env:
+            exp = env.tmp / "experiments"
+            exp.mkdir(parents=True, exist_ok=True)
+            (exp / "v4-parent.md").write_text(_FORMAL_SPEC, encoding="utf-8")
+            parent = _seed_parent()
+            # Seed an APPROVED prereg on the parent.
+            pspec = load_spec(env.tmp, "v4-parent")
+            assert pspec is not None, "test spec must be valid"
+            ps = ResearchStore(parent.episodes_db)
+            ps.add_prereg(
+                experiment_id="v4-parent", spec_hash=pspec.spec_hash, spec_source="x",
+                hypotheses=pspec.hypotheses, ivars=[], dvars=[], controls=[],
+                success=[], stopping=[],
+                code_vocab=[{"code": "c1", "definition": "d", "maps_to_hypothesis": "H1"}],
+                raw_output=None, model="m",
+            )
+            ps.approve_prereg("v4-parent", pspec.spec_hash)
+
+            cid, _ = im.create_cloned_instance(
+                parent, name="Prereg Clone", model="claude-opus-4-8",
+                require_slack=False, validate_model=False,
+            )
+
+            cspec = load_spec(env.tmp, cid)
+            assert cspec is not None, "child spec must load"
+            assert cspec.spec_hash != pspec.spec_hash, "child spec_hash must differ (experiment_id rewritten)"
+            cs = ResearchStore(ic.load_instance(cid).episodes_db)
+            cpr = cs.get_prereg(cid, cspec.spec_hash)
+            assert cpr is not None, "child prereg must exist, re-keyed to the child spec_hash"
+            assert cpr.get("status") == "approved", cpr.get("status")
+            assert [c["code"] for c in (cpr.get("code_vocab") or [])] == ["c1"], cpr.get("code_vocab")
+    return "approved coding scheme cloned + re-approved, re-keyed to child spec_hash"
+
+
+def scenario_unapproved_prereg_not_cloned():
+    """If the parent's coding scheme is NOT approved, nothing is copied — the clone
+    will operationalize its own scheme on first run (unchanged behavior)."""
+    from research.spec import load_spec
+    from research.store import ResearchStore
+    with tempfile.TemporaryDirectory() as td:
+        with clone_env(Path(td)) as env:
+            exp = env.tmp / "experiments"
+            exp.mkdir(parents=True, exist_ok=True)
+            (exp / "v4-parent.md").write_text(_FORMAL_SPEC, encoding="utf-8")
+            parent = _seed_parent()
+            pspec = load_spec(env.tmp, "v4-parent")
+            ps = ResearchStore(parent.episodes_db)
+            ps.add_prereg(  # left at default 'pending_approval'
+                experiment_id="v4-parent", spec_hash=pspec.spec_hash, spec_source="x",
+                hypotheses=pspec.hypotheses, ivars=[], dvars=[], controls=[],
+                success=[], stopping=[], code_vocab=[{"code": "c1", "definition": "d"}],
+                raw_output=None, model="m",
+            )
+            cid, _ = im.create_cloned_instance(
+                parent, name="No Prereg", model="claude-opus-4-8",
+                require_slack=False, validate_model=False,
+            )
+            cspec = load_spec(env.tmp, cid)
+            cs = ResearchStore(ic.load_instance(cid).episodes_db)
+            assert cs.get_prereg(cid, cspec.spec_hash) is None, "unapproved scheme must NOT be cloned"
+    return "unapproved parent scheme is not cloned; child starts clean"
+
+
 SCENARIOS = [
     ("happy path clone", scenario_happy_path_clone),
     ("rollback on slack failure", scenario_rollback_on_slack_failure),
     ("validation errors", scenario_validation_errors),
     ("invalid model rejected", scenario_invalid_model_rejected),
+    ("experiment spec cloned", scenario_spec_cloned),
+    ("approved prereg cloned", scenario_approved_prereg_cloned),
+    ("unapproved prereg not cloned", scenario_unapproved_prereg_not_cloned),
 ]
 
 
