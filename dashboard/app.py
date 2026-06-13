@@ -1277,8 +1277,8 @@ def create_instance():
 
 def _experiment_hypothesis(instance_id: str) -> str | None:
     """Extract the body of the '## Question / hypothesis' section from
-    experiments/<id>.md (heading until the next '##'). Truncated to ~600 chars.
-    Returns None if the file or section is missing/empty."""
+    experiments/<id>.md (heading until the next '##'). Full text (the overview
+    clamps it visually). Returns None if the file or section is missing/empty."""
     path = ROOT / "experiments" / f"{instance_id}.md"
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1301,8 +1301,8 @@ def _experiment_hypothesis(instance_id: str) -> str | None:
     blurb = "\n".join(body).strip()
     if not blurb:
         return None
-    if len(blurb) > 600:
-        blurb = blurb[:600].rstrip() + "…"
+    # Full text — the overview clamps it visually (.clamp10) with a JS
+    # show-more/less toggle, so no server-side truncation is needed.
     return blurb
 
 
