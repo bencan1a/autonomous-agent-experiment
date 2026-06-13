@@ -212,6 +212,15 @@
       line-clamp: unset;
       overflow: visible;
     }
+    /* The experiment description is in the header and uses the tap toggle to
+       expand; it must NOT expand-on-hover (the box growing/shrinking as the
+       cursor passes over it shoves the chips around). Stay clamped on hover
+       unless the operator has explicitly toggled it open. */
+    .exp-summary .clamp10:not(.expanded):hover {
+      -webkit-line-clamp: 10;
+      line-clamp: 10;
+      overflow: hidden;
+    }
   }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .stat-grid {
