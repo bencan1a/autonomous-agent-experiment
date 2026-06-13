@@ -440,7 +440,7 @@ def registry_entry(registry: dict, instance_id: str) -> dict | None:
 def active_instance_id(registry: dict | None = None) -> str | None:
     reg = registry if registry is not None else load_registry()
     for iid, ent in reg.get("instances", {}).items():
-        if ent.get("active"):
+        if ent.get("status") == "active":
             return iid
     return None
 
@@ -455,7 +455,7 @@ def active_instance_ids(registry: dict | None = None) -> list[str]:
     reg = registry if registry is not None else load_registry()
     actives = [
         (iid, ent) for iid, ent in reg.get("instances", {}).items()
-        if ent.get("active")
+        if ent.get("status") == "active"
     ]
     actives.sort(key=lambda kv: kv[1].get("last_wake") or "", reverse=True)
     return [iid for iid, _ in actives]

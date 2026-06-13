@@ -47,6 +47,12 @@ class RecordingCron:
     def clear_instance(self, iid):
         self.calls.append(("clear", iid))
 
+    def remove_instance_entries(self, iid):
+        # instance_control.pause() clears the schedule via this; record it as a
+        # 'clear' so existing assertions hold.
+        self.calls.append(("clear", iid))
+        return 0
+
     def install_instance_one_shot(self, iid, *, minutes_from_now, command=None):
         self.calls.append(("install", iid, minutes_from_now))
         return "fake"
@@ -82,12 +88,18 @@ class fork_env:
             (ic, "REGISTRY_LOCK"): ic.REGISTRY_LOCK,
             (im, "AGENT_ROOT"): im.AGENT_ROOT,
             (im, "cron"): im.cron,
+            # State transitions now route cron through instance_control -> the
+            # cron_control MODULE, so patch the module funcs too (else real crontab).
+            (cron_control, "install_instance_one_shot"): cron_control.install_instance_one_shot,
+            (cron_control, "remove_instance_entries"): cron_control.remove_instance_entries,
         }
         ic.INSTANCES_DIR = self.tmp / "instances"
         ic.REGISTRY_PATH = self.tmp / "registry.json"
         ic.REGISTRY_LOCK = self.tmp / "registry.json.lock"
         im.AGENT_ROOT = self.tmp
         im.cron = self.cron
+        cron_control.install_instance_one_shot = self.cron.install_instance_one_shot
+        cron_control.remove_instance_entries = self.cron.remove_instance_entries
         (self.tmp / "experiments").mkdir(parents=True, exist_ok=True)
         (self.tmp / "instances").mkdir(parents=True, exist_ok=True)
         return self
@@ -227,9 +239,9 @@ def scenario_fork_transparency_and_lineage():
                 assert e["parent_id"] == PARENT and e["branch_label"] == label, e
                 assert e["forked_at_invocation"] == 7, e
                 assert e["fork_group"] == "v4-continuous@7:a.b", e
-                assert e["active"] is True, e
-            # parent frozen
-            assert reg["instances"][PARENT]["active"] is False
+                assert e["status"] == "active", e
+            # parent frozen (single status; no separate `active` flag)
+            assert reg["instances"][PARENT]["status"] == "paused"
             assert set(ic.active_instance_ids()) == set(ids)
 
             # cron: installed both children, parent cleared, parent not scheduled

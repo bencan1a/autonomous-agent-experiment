@@ -101,9 +101,9 @@ def scenario_happy_path_clone():
             for k in ("parent_id", "branch_label", "fork_group", "forked_at_invocation"):
                 assert k not in c, f"lineage key {k!r} must be absent on a clone"
 
-            # registry: paused + inactive
+            # registry: paused (single status; no separate `active` flag)
             ent = ic.registry_entry(ic.load_registry(), child_id)
-            assert ent is not None and ent["status"] == "paused" and ent["active"] is False, ent
+            assert ent is not None and ent["status"] == "paused" and "active" not in ent, ent
 
             # empty memory + empty workspace (no state copy)
             ep = EpisodicStore(child.episodes_db)

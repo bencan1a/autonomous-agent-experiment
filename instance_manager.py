@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import cron_control as cron
+import instance_control
 import lockfile
 from instances_common import (
     AGENT_ROOT,
@@ -56,61 +57,23 @@ def _err(msg: str) -> int:
     return 1
 
 
-def _sync_status(instance_id: str, status: str) -> None:
-    """Mirror a status change into the instance's config.json."""
-    try:
-        inst = load_instance(instance_id)
-    except FileNotFoundError:
-        return
-    inst.config["status"] = status
-    save_config(instance_id, inst.config)
+def _activate_many(instance_ids: list[str], minutes_from_now: int, *, solo: bool) -> list[str]:
+    """Start each id and schedule its wake. ADDITIVE by default — concurrency is
+    allowed, so this does NOT pause other instances. With ``solo=True`` it first
+    pauses every other currently-active instance (opt-in exclusivity) and returns
+    the ids it paused.
 
-
-def _set_lifecycle(
-    registry: dict, instance_id: str, *, status: str, active: bool
-) -> None:
-    """Update both the registry entry and config.json for one instance."""
-    ent = registry_entry(registry, instance_id)
-    if ent is not None:
-        ent["status"] = status
-        ent["active"] = active
-    _sync_status(instance_id, status)
-
-
-def _deactivate_unrelated(registry: dict, keep_group: set[str]) -> list[str]:
-    """Pause + unschedule every active instance NOT in ``keep_group``.
-
-    Single-active is no longer an invariant: a fork-group's branches stay
-    co-active together. This deactivates only instances outside the group.
-    Returns the ids deactivated. Mutates ``registry`` in place; caller saves it
-    (use ``registry_txn``). Calls ``cron.clear_instance`` while the caller holds
-    the registry lock — registry-before-crontab order, never the reverse.
+    Each transition manages its own registry txn (via ``instance_control``), so
+    this MUST NOT be called inside a ``registry_txn`` block — that would re-enter
+    the registry file lock.
     """
     deactivated: list[str] = []
-    for iid, ent in registry.get("instances", {}).items():
-        if iid in keep_group or not ent.get("active"):
-            continue
-        cron.clear_instance(iid)
-        _set_lifecycle(registry, iid, status="paused", active=False)
-        deactivated.append(iid)
-    return deactivated
-
-
-def _activate_group(
-    registry: dict, instance_ids: list[str], minutes_from_now: int
-) -> list[str]:
-    """Make exactly ``instance_ids`` the active set; pause all others; schedule each.
-
-    Mutates ``registry`` in place; the caller saves it (use ``registry_txn``).
-    A group of one reproduces the old single-active behavior. Returns the ids
-    that were deactivated.
-    """
-    keep = set(instance_ids)
-    deactivated = _deactivate_unrelated(registry, keep)
+    if solo:
+        deactivated = instance_control.pause_others(
+            set(instance_ids), reason="deactivated by --solo activation"
+        )
     for iid in instance_ids:
-        _set_lifecycle(registry, iid, status="active", active=True)
-    for iid in instance_ids:
-        cron.install_instance_one_shot(iid, minutes_from_now=minutes_from_now)
+        instance_control.start(iid, minutes_from_now=minutes_from_now)
     return deactivated
 
 
@@ -424,14 +387,20 @@ def fork_instance(
                 "version": parent.version,
                 "status": "paused",
                 "created_at": now_iso(),
-                "active": False,
                 "last_wake": (registry_entry(registry, parent_id) or {}).get("last_wake"),
                 "parent_id": parent_id,
                 "branch_label": p["composed"],
                 "fork_group": fork_group,
                 "forked_at_invocation": fork_point,
             }
-        _activate_group(reg, group, minutes)
+    # Freezing the parent is an explicit pause (it is left out of the active
+    # group). Additive activation no longer pauses it as a side effect, so do it
+    # deliberately here. Unrelated instances are NOT touched.
+    if freeze_parent:
+        instance_control.pause(parent_id, reason="frozen at fork point")
+    # Co-activate the branches ADDITIVELY (outside the registry txn — start opens
+    # its own).
+    _activate_many(group, minutes, solo=False)
 
     # --- Slack: provision each child's channels + replay parent history ---
     if do_slack:
@@ -661,7 +630,6 @@ def create_cloned_instance(
             "version": parent.version,
             "status": "paused",
             "created_at": now_iso(),
-            "active": False,
             "last_wake": None,
         }
 
@@ -718,7 +686,6 @@ def cmd_create(args: argparse.Namespace) -> int:
             "version": args.version,
             "status": "paused",
             "created_at": now_iso(),
-            "active": False,
             "last_wake": None,
         }
 
@@ -787,21 +754,80 @@ def cmd_fork(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    # Single status column (the source of truth). The old separate ACTIVE flag is
+    # gone — 'active' status == running/scheduled; multiple may run concurrently.
     rows = list_instances()
-    header = ("ID", "NAME", "VERSION", "STATUS", "ACTIVE", "LAST WAKE")
-    fmt = "{:<20} {:<20} {:<8} {:<9} {:<7} {:<25}"
+    header = ("ID", "NAME", "VERSION", "STATUS", "LAST WAKE")
+    fmt = "{:<20} {:<20} {:<8} {:<10} {:<25}"
     print(fmt.format(*header))
     print(fmt.format(*("-" * len(h) for h in header)))
     for ent in rows:
-        active = "*" if ent.get("active") else ""
         print(fmt.format(
             str(ent.get("id", ""))[:20],
             str(ent.get("name", ""))[:20],
             str(ent.get("version", "")),
             str(ent.get("status", "")),
-            active,
             str(ent.get("last_wake") or "-"),
         ))
+    return 0
+
+
+def reconcile_state() -> list[dict]:
+    """Derive each instance's unified status from the (possibly divergent) registry
+    + legacy control.json, then drop the redundant registry `active` flag and the
+    sidecar `paused` key. Idempotent. An instance that was registry-'active' but
+    control-'paused' (the divergence bug) resolves to 'paused'. Returns one dict
+    per instance describing the before/after."""
+    import json as _json
+    reg = load_registry()
+    rows: list[dict] = []
+    for iid, ent in list(reg.get("instances", {}).items()):
+        old_status = ent.get("status")
+        had_active = bool(ent.get("active"))
+        cp = instance_control.control_path(iid)
+        raw = None
+        ctrl_paused = False
+        try:
+            raw = _json.loads(cp.read_text(encoding="utf-8"))
+            ctrl_paused = bool(raw.get("paused"))
+        except Exception:
+            raw = None
+        if old_status == "archived":
+            new_status = "archived"
+        elif old_status == "paused" or ctrl_paused:
+            new_status = "paused"
+        else:
+            new_status = "active"
+        instance_control.apply_status(iid, new_status)  # also drops the `active` flag
+        if raw is not None and "paused" in raw:
+            raw.pop("paused", None)
+            try:
+                cp.write_text(_json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+            except OSError:
+                pass
+        rows.append({
+            "id": iid, "old_status": old_status, "had_active": had_active,
+            "ctrl_paused": ctrl_paused, "new_status": new_status,
+        })
+    return rows
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    rows = reconcile_state()
+    hdr = f"{'ID':<24} {'old':<10} {'active?':<8} {'ctrl_paused?':<13} -> status"
+    print(hdr)
+    print("-" * len(hdr))
+    for r in rows:
+        print(
+            f"{r['id']:<24} {str(r['old_status'] or '-'):<10} "
+            f"{('yes' if r['had_active'] else '-'):<8} "
+            f"{('yes' if r['ctrl_paused'] else '-'):<13} -> {r['new_status']}"
+        )
+    print(
+        f"\nreconciled {len(rows)} instance(s); the registry `active` flag and the "
+        "sidecar `paused` key are dropped. Registry `status` is now the single "
+        "source of truth."
+    )
     return 0
 
 
@@ -816,8 +842,7 @@ def cmd_activate(args: argparse.Namespace) -> int:
             "reactivate it (it will transition archived -> active)"
         )
     minutes = args.in_minutes if args.in_minutes is not None else cron.MIN_INTERVAL_MINUTES
-    with registry_txn() as reg:
-        deactivated = _activate_group(reg, [args.id], minutes)
+    deactivated = _activate_many([args.id], minutes, solo=getattr(args, "solo", False))
     _report_activation([args.id], deactivated)
     return 0
 
@@ -835,9 +860,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
     registry = load_registry()
     if registry_entry(registry, args.id) is None:
         return _err(f"no such instance: {args.id}")
-    cron.clear_instance(args.id)
-    with registry_txn() as reg:
-        _set_lifecycle(reg, args.id, status="paused", active=False)
+    instance_control.pause(args.id, reason="paused via cli")
     print(f"paused '{args.id}' (data retained, schedule cleared)")
     return 0
 
@@ -851,8 +874,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return _err(
             f"instance '{args.id}' is archived; cannot resume an archived instance"
         )
-    with registry_txn() as reg:
-        deactivated = _activate_group(reg, [args.id], cron.MIN_INTERVAL_MINUTES)
+    deactivated = _activate_many(
+        [args.id], cron.MIN_INTERVAL_MINUTES, solo=getattr(args, "solo", False)
+    )
     _report_activation([args.id], deactivated)
     return 0
 
@@ -861,9 +885,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
     registry = load_registry()
     if registry_entry(registry, args.id) is None:
         return _err(f"no such instance: {args.id}")
-    cron.clear_instance(args.id)
-    with registry_txn() as reg:
-        _set_lifecycle(reg, args.id, status="archived", active=False)
+    instance_control.archive(args.id)
     print(f"archived '{args.id}' (data retained)")
 
     # Best-effort: archive the instance's Slack channels too.
@@ -1228,7 +1250,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_fork.set_defaults(func=cmd_fork)
 
-    p_activate = sub.add_parser("activate", help="make an instance the sole active one")
+    p_activate = sub.add_parser(
+        "activate", help="start an instance (additive — others keep running unless --solo)")
     p_activate.add_argument("id", help="instance id")
     p_activate.add_argument(
         "--in-minutes", type=int, default=None, dest="in_minutes",
@@ -1238,19 +1261,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-archived", action="store_true",
         help="allow reactivating an archived instance (archived -> active)",
     )
+    p_activate.add_argument(
+        "--solo", action="store_true",
+        help="exclusivity: pause every other active instance first",
+    )
     p_activate.set_defaults(func=cmd_activate)
 
     p_pause = sub.add_parser("pause", help="pause an instance (clear its schedule)")
     p_pause.add_argument("id", help="instance id")
     p_pause.set_defaults(func=cmd_pause)
 
-    p_resume = sub.add_parser("resume", help="resume a paused instance (== activate)")
+    p_resume = sub.add_parser("resume", help="resume a paused instance (additive; --solo for exclusivity)")
     p_resume.add_argument("id", help="instance id")
+    p_resume.add_argument(
+        "--solo", action="store_true",
+        help="exclusivity: pause every other active instance first",
+    )
     p_resume.set_defaults(func=cmd_resume)
 
     p_archive = sub.add_parser("archive", help="archive an instance (data retained)")
     p_archive.add_argument("id", help="instance id")
     p_archive.set_defaults(func=cmd_archive)
+
+    p_reconcile = sub.add_parser(
+        "reconcile",
+        help="unify run-state: derive a single status from registry+control.json, drop legacy flags",
+    )
+    p_reconcile.set_defaults(func=cmd_reconcile)
 
     p_provision = sub.add_parser(
         "slack-provision", help="create/reuse the instance's three Slack channels"

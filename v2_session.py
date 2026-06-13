@@ -471,7 +471,15 @@ def _budget_pause_and_notify(
     slack: SlackClient | None, episodic: EpisodicStore, *, instance_id: str, reason: str,
 ) -> None:
     log.warning("BUDGET PAUSE: %s", reason)
-    cron_control.clear_instance(instance_id)
+    # Unified pause: sets registry status='paused' AND clears the schedule, so
+    # `list`/dashboard/orchestrator all agree (clearing cron alone left the
+    # registry showing 'active').
+    try:
+        import instance_control
+        instance_control.pause(instance_id, reason=f"budget: {reason}")
+    except Exception:
+        log.exception("failed to pause instance on budget breach")
+        cron_control.clear_instance(instance_id)
     msg = (
         ":octagonal_sign: *v2 agent paused — budget exceeded.*\n"
         f"{reason}\nCron entry cleared. Re-enable manually after review."
@@ -492,13 +500,14 @@ def _fatal_pause_and_notify(
     log.error("FATAL SESSION ERROR (%s): %s", instance.id, reason)
     try:
         import instance_control
-        instance_control.set_paused(instance.id, reason=f"fatal session error: {reason}")
+        # Unified pause: registry status='paused' + schedule cleared together.
+        instance_control.pause(instance.id, reason=f"fatal session error: {reason}")
     except Exception:
-        log.exception("failed to set paused flag on fatal error")
-    try:
-        cron_control.clear_instance(instance.id)
-    except Exception:
-        log.exception("failed to clear cron on fatal error")
+        log.exception("failed to pause instance on fatal error")
+        try:
+            cron_control.clear_instance(instance.id)
+        except Exception:
+            log.exception("failed to clear cron on fatal error")
     msg = (
         ":rotating_light: *Agent paused — session error.*\n"
         f"{reason}\n"

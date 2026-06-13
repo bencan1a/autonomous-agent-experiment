@@ -196,7 +196,7 @@ def _inject_instance_context():
             "name": inst.name,
             "version": inst.version,
             "status": (entry or {}).get("status"),
-            "active": (entry or {}).get("active", False),
+            "active": (entry or {}).get("status") == "active",
             "model": current_model,
             # lineage (None for non-forked instances)
             "branch_label": branch_label,
@@ -357,10 +357,10 @@ def _status() -> dict:
             }
     entries = cron_control.current_instance_entries(g.instance.id)
     if not entries:
-        # Distinguish an operator pause (cron deliberately removed by the Pause
-        # control) from a genuine self-quiescence / never-run state.
-        control = instance_control.read_control(g.instance.id)
-        if control.get("paused"):
+        # Distinguish an operator pause (registry status 'paused') from a genuine
+        # self-quiescence / never-run state.
+        if instance_control.is_paused(g.instance.id):
+            control = instance_control.read_control(g.instance.id)
             paused_at = control.get("paused_at")
             since = f" since {paused_at}" if paused_at else ""
             return {
@@ -1205,13 +1205,9 @@ def pause():
     iid = g.instance.id
     if not _control_authorized(request.form.get("password")):
         return redirect(url_for("index", instance=iid, control="badpass"))
-    instance_control.set_paused(iid, reason="operator maintenance pause")
-    # Kill any scheduled wake so nothing fires while paused (covers the
-    # between-sessions case where the orchestrator startup guard won't run).
-    try:
-        cron_control.remove_instance_entries(iid)
-    except Exception:
-        app.logger.exception("failed to remove cron entry on pause")
+    # Unified pause: sets registry status='paused' AND clears the schedule, so
+    # the dashboard, `instance_manager list`, and the orchestrator all agree.
+    instance_control.pause(iid, reason="operator maintenance pause")
     return redirect(url_for("index", instance=iid, control="paused"))
 
 
@@ -1223,23 +1219,7 @@ def resume():
     if not _control_authorized(request.form.get("password")):
         return redirect(url_for("index", instance=iid, control="badpass"))
 
-    prior = instance_control.clear_paused(iid)
-
-    # Restore registry + config status to "active" (pause set it to "paused").
-    try:
-        with registry_txn() as reg:
-            ent = registry_entry(reg, iid)
-            if ent is not None:
-                ent["status"] = "active"
-                ent["active"] = True
-        try:
-            inst = load_instance(iid)
-            inst.config["status"] = "active"
-            save_config(iid, inst.config)
-        except Exception:
-            app.logger.exception("resume: failed to sync status to config.json (non-fatal)")
-    except Exception:
-        app.logger.exception("resume: failed to update registry status (non-fatal)")
+    prior = instance_control.read_control(iid)
 
     now = datetime.now(UTC)
     paused_at = _parse_iso(prior.get("paused_at"))
@@ -1259,12 +1239,12 @@ def resume():
             "This was planned downtime, not a malfunction; your workspace, memories, and handoff "
             "were preserved intact. Nothing is wrong — pick up wherever you left off."
         )
-    instance_control.set_resume_note(iid, note)
-
+    # Unified resume: set status='active', mirror to config, schedule the wake,
+    # and set the agent-facing resume note — one path, no registry/control drift.
     try:
-        cron_control.install_instance_one_shot(iid, minutes_from_now=2)
+        instance_control.start(iid, minutes_from_now=2, resume_note=note)
     except Exception:
-        app.logger.exception("failed to schedule near-term wake on resume")
+        app.logger.exception("failed to resume instance")
     return redirect(url_for("index", instance=iid, control="resumed"))
 
 
@@ -2343,7 +2323,7 @@ def api_instances():
             "name": name,
             "version": version,
             "status": entry.get("status"),
-            "active": bool(entry.get("active", False)),
+            "active": entry.get("status") == "active",
             "invocation_count": invocation_count,
         })
     return jsonify(out)

@@ -31,7 +31,7 @@
 
     <section>
       <h2>Next invocation</h2>
-      {% set paused = control_state and control_state.paused %}
+      {% set paused = selected_instance and selected_instance.status == 'paused' %}
       {% if status.state == 'running' %}<span class="pill ok" style="text-transform:uppercase">running</span>
       {% elif status.state == 'scheduled' %}<span class="pill ok" style="text-transform:uppercase">scheduled</span>
       {% elif status.state == 'stale' %}<span class="pill warn" style="text-transform:uppercase">stale</span>
