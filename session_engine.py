@@ -441,7 +441,23 @@ def run_post_session_panel(rt: SessionRuntime) -> None:
 
 def schedule_next_wake(rt: SessionRuntime, minutes_from_now: int | None) -> None:
     """Install the one-shot cron for the next wake. ``None`` means the agent chose
-    not to reschedule (v2 only) — clear the entry instead."""
+    not to reschedule (v2 only) — clear the entry instead.
+
+    If the operator paused the instance DURING the session (its registry status is
+    now 'paused'), honor that: skip the reschedule and clear any cron, so the
+    end-of-session reschedule can't resurrect a 'paused but counting down' orphan.
+    We read the registry entry directly and skip only on an explicit 'paused'
+    status — an absent entry (only ever the case in tests) reschedules as before.
+    """
+    from instances_common import load_registry, registry_entry
+    ent = registry_entry(load_registry(), rt.instance.id)
+    if ent is not None and ent.get("status") == "paused":
+        log.info("Instance paused during the session; skipping reschedule, clearing cron.")
+        try:
+            cron_control.clear_instance(rt.instance.id)
+        except Exception:
+            log.exception("Failed to clear cron for paused instance")
+        return
     if minutes_from_now is None:
         log.info("No next wake scheduled; cron entry cleared.")
         cron_control.clear_instance(rt.instance.id)

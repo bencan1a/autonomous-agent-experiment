@@ -104,6 +104,24 @@ def main() -> int:
             check("schedule_next_wake(None) clears the cron entry",
                   bool(p.cron.find("clear_instance")))
 
+    # 6. A mid-session operator pause is honored: no reschedule, cron cleared
+    #    (guards against the 'paused but counting down' orphan).
+    import instances_common
+    with tempfile.TemporaryDirectory() as td:
+        inst = _build_instance(Path(td), {})
+        with Patches([]) as p:
+            rt = session_engine.setup_session(inst)
+            saved_load_registry = instances_common.load_registry
+            instances_common.load_registry = lambda: {"instances": {inst.id: {"status": "paused"}}}
+            try:
+                session_engine.schedule_next_wake(rt, 45)
+            finally:
+                instances_common.load_registry = saved_load_registry
+            check("paused mid-session -> schedule_next_wake installs nothing",
+                  not p.cron.find("install_instance_one_shot"))
+            check("paused mid-session -> schedule_next_wake clears the cron entry",
+                  bool(p.cron.find("clear_instance")))
+
     print()
     if _failures:
         print(f"{_failures} check(s) FAILED")
