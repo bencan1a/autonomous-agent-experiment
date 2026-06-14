@@ -72,16 +72,18 @@ it generates self-originating continuation, versus v2's settle-and-sleep pattern
 
 ## Specification (formal)
 
-The block below is the panel's intended ground truth (parsed by `research/spec.py`). It is
+The block below documents v3's intended formal spec (parsed by `research/spec.py`). It is
 adapted from v4's spec, restricted to v3's single variable (system-owned session structure)
-and v3's actual mechanics (the logged-only `would_end_now`, the v2-inherited reload).
+and v3's actual mechanics (the logged-only `would_end_now`, the v2-inherited reload). It is
+kept for the design record only.
 
-> **⚠️ NEEDS OPERATOR APPROVAL.** This spec block has **not** been approved. When the
-> operator is satisfied with it, run
-> `instance_manager.py research operationalize v3-circadian` and then
-> `instance_manager.py research approve v3-circadian`. Until then the panel's coding scheme
-> for v3-circadian stays `pending_approval`. Do **not** treat the hash of this block as an
-> approved baseline; editing the block before approval is expected and free.
+> **🚫 Intentionally NOT operationalized — v3 is retired (operator decision, 2026-06-14).**
+> v3-circadian is a paused baseline and a known *flawed instrument* (superseded by v4); it
+> will not run further sessions, so its research panel is deliberately left inactive (the
+> instance also has no `research` seats configured, so the panel no-ops for it regardless).
+> The spec is **not** approved and **will not be** — do not run
+> `research operationalize`/`approve` for v3, and do not flag this as a pending task. The
+> block is preserved as documentation of the design, not as an approved baseline.
 
 ```yaml
 spec_version: 1
