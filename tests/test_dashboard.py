@@ -235,6 +235,15 @@ def scenario_cache_headers():
     return "responses carry no-store cache headers"
 
 
+def scenario_template_folder_absolute():
+    """template_folder must be absolute so templates resolve regardless of how
+    the app is launched (cwd / relative-vs-absolute `python dashboard/app.py`).
+    A relative folder 500s the no_instances page when there is no active instance."""
+    assert Path(dash.app.template_folder).is_absolute(), dash.app.template_folder
+    assert (Path(dash.app.template_folder) / "no_instances.html").exists()
+    return "template_folder is absolute (launch-invariant)"
+
+
 SCENARIOS = [
     ("html routes render 200", scenario_html_routes),
     ("zero-instance empty state", scenario_no_instances),
@@ -242,6 +251,7 @@ SCENARIOS = [
     ("api surface + 404s", scenario_api),
     ("control fail-closed", scenario_control_fail_closed),
     ("no-store cache headers", scenario_cache_headers),
+    ("template_folder absolute", scenario_template_folder_absolute),
 ]
 
 

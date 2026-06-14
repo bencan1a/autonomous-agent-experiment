@@ -46,7 +46,7 @@ from dashboard.views.control import bp as control_bp  # noqa: E402
 from dashboard.views.api import bp as api_bp  # noqa: E402
 
 
-app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
+app = Flask(__name__, template_folder=str(Path(__file__).resolve().parent / "templates"))
 # Re-read templates from disk when they change, so edits to dashboard/templates/*.html
 # take effect on the next request without restarting the long-lived process. Cheap
 # (an mtime stat per render); independent of debug mode, which stays off in prod.
