@@ -6,15 +6,15 @@
     <div class="ts" style="margin-bottom: 8px;">
       {{ size|fmt_bytes }} · modified {{ mtime|fmt_dt }} ({{ mtime|relative_time }})
       &nbsp;·&nbsp;
-      <a href="{{ url_for('workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">view raw</a>
+      <a href="{{ url_for('html.workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">view raw</a>
       &nbsp;·&nbsp;
-      <a href="{{ url_for('workspace_index', instance=selected_instance.id if selected_instance else None) }}">back to workspace</a>
+      <a href="{{ url_for('html.workspace_index', instance=selected_instance.id if selected_instance else None) }}">back to workspace</a>
     </div>
 
     {% if is_binary %}
       <div class="empty">
         Binary file ({{ size|fmt_bytes }}). Use the
-        <a href="{{ url_for('workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">raw link</a> to download.
+        <a href="{{ url_for('html.workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">raw link</a> to download.
       </div>
     {% elif text is none %}
       <div class="empty">File could not be read.</div>
@@ -22,7 +22,7 @@
       {% if truncated %}
         <div class="ts" style="color: var(--warn); margin-bottom: 6px;">
           ⚠ truncated to first {{ text|length|fmt_bytes }}.
-          <a href="{{ url_for('workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">view raw for full content</a>
+          <a href="{{ url_for('html.workspace_raw', relpath=relpath, instance=selected_instance.id if selected_instance else None) }}">view raw for full content</a>
         </div>
       {% endif %}
       <pre style="max-height: 75vh; overflow: auto;">{{ text }}</pre>

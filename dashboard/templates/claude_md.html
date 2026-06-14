@@ -38,7 +38,7 @@
             <td class="ts">{{ h.timestamp|relative_time }}</td>
             <td>
               {% if h.session_id %}
-                <a href="{{ url_for('session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
+                <a href="{{ url_for('html.session_detail', session_id=h.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ h.session_id }}</a>
               {% else %}—{% endif %}
             </td>
             <td style="text-align:right;">{{ h.size }}</td>

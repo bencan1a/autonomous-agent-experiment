@@ -27,7 +27,7 @@
                 <span class="tool cat-control">dir</span>
                 <strong>{{ e.name }}/</strong>
               {% else %}
-                <a href="{{ url_for('workspace_view', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">{{ e.name }}</a>
+                <a href="{{ url_for('html.workspace_view', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">{{ e.name }}</a>
               {% endif %}
             </td>
             <td style="text-align:right;" class="num">
@@ -36,9 +36,9 @@
             <td class="ts nowrap">{{ e.mtime|relative_time }}</td>
             <td>
               {% if not e.is_dir %}
-                <a href="{{ url_for('workspace_view', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">view</a>
+                <a href="{{ url_for('html.workspace_view', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">view</a>
                 &nbsp;
-                <a href="{{ url_for('workspace_raw', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">raw</a>
+                <a href="{{ url_for('html.workspace_raw', relpath=e.relpath, instance=selected_instance.id if selected_instance else None) }}">raw</a>
               {% endif %}
             </td>
           </tr>

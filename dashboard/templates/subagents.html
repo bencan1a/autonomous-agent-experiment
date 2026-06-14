@@ -23,7 +23,7 @@
           <tr>
             <td class="ts">{{ c.id }}</td>
             <td class="ts">{{ c.timestamp|fmt_dt }}</td>
-            <td><a href="{{ url_for('session_detail', session_id=c.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ c.session_id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=c.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ c.session_id }}</a></td>
             <td>{{ c.model or '—' }}</td>
             <td>
               {% if c.system_prompt %}

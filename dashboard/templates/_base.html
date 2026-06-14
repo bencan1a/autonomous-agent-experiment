@@ -520,17 +520,17 @@
 </head>
 <body>
 <header>
-  <h1><a href="{{ url_for('index') }}{{ ('?instance=' ~ selected_instance.id) if selected_instance else '' }}">autonomous agent · dashboard</a></h1>
+  <h1><a href="{{ url_for('html.index') }}{{ ('?instance=' ~ selected_instance.id) if selected_instance else '' }}">autonomous agent · dashboard</a></h1>
   {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
   <nav>
-    <a href="{{ url_for('index') }}{{ iq }}">overview</a>
-    <a href="{{ url_for('research_view') }}{{ iq }}">research</a>
-    <a href="{{ url_for('logs') }}{{ iq }}">logs</a>
-    <a href="{{ url_for('workspace_index') }}{{ iq }}">workspace</a>
-    <a href="{{ url_for('actions_log') }}{{ iq }}">actions</a>
-    <a href="{{ url_for('subagents_log') }}{{ iq }}">subagents</a>
-    <a href="{{ url_for('claude_md_view') }}{{ iq }}">AGENTS.md</a>
-    <a href="{{ url_for('prompt_view') }}{{ iq }}">prompt</a>
+    <a href="{{ url_for('html.index') }}{{ iq }}">overview</a>
+    <a href="{{ url_for('html.research_view') }}{{ iq }}">research</a>
+    <a href="{{ url_for('html.logs') }}{{ iq }}">logs</a>
+    <a href="{{ url_for('html.workspace_index') }}{{ iq }}">workspace</a>
+    <a href="{{ url_for('html.actions_log') }}{{ iq }}">actions</a>
+    <a href="{{ url_for('html.subagents_log') }}{{ iq }}">subagents</a>
+    <a href="{{ url_for('html.claude_md_view') }}{{ iq }}">AGENTS.md</a>
+    <a href="{{ url_for('html.prompt_view') }}{{ iq }}">prompt</a>
   </nav>
   {% if instances %}
   <div class="new-instance-wrap">
@@ -570,7 +570,7 @@
        "+ New instance…" dropdown item). New instance starts paused/empty. #}
     <div id="new-instance-panel">
       <div class="np-title">New instance — clone “{{ selected_instance.name }}” ({{ selected_instance.version }})</div>
-      <form method="POST" action="{{ url_for('create_instance', instance=selected_instance.id) }}" autocomplete="off">
+      <form method="POST" action="{{ url_for('control.create_instance', instance=selected_instance.id) }}" autocomplete="off">
         <label for="ni-name">name</label>
         <input type="text" id="ni-name" name="name" value="{{ selected_instance.name }} ({{ selected_instance.version }})" required>
         <label for="ni-model">model</label>
