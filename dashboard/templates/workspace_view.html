@@ -1,9 +1,5 @@
 {% extends "_base.html" %}
 
-{% block header_meta %}
-  &nbsp; <a href="{{ url_for('workspace_index', instance=selected_instance.id if selected_instance else None) }}">← workspace</a>
-{% endblock %}
-
 {% block main %}
   <section class="wide">
     <h2>{{ relpath }}</h2>

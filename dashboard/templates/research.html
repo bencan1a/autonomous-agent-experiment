@@ -1,10 +1,7 @@
 {% extends "_base.html" %}
+{% import "_macros.html" as ui %}
 
 {% block title %}Research — dashboard{% endblock %}
-
-{% block header_meta %}
-  &nbsp; research
-{% endblock %}
 
 {% block main %}
   {# ---------------- Rolling cumulative synthesis report ---------------- #}
@@ -21,7 +18,7 @@
       {% if r.executive_summary %}<p class="focus">{{ r.executive_summary|replace('\n\n', '</p><p class="focus">')|safe }}</p>{% endif %}
 
       {% for h in r.hypotheses %}
-        <div class="card" style="margin:8px 0; padding:10px; border:1px solid var(--border,#333); border-radius:6px;">
+        <div class="card" style="margin:8px 0;">
           <div>
             <strong>{{ h.id }}</strong>
             {% if h.verdict == 'supported' %}<span class="pill ok">supported</span>
@@ -36,7 +33,7 @@
           </div>
           {% if spec %}
             {% for sh in spec.hypotheses if sh.id == h.id %}
-              <blockquote class="small" style="margin:6px 0; padding:4px 0 4px 10px; border-left:3px solid var(--border,#333);">
+              <blockquote class="small" style="margin:6px 0; padding:4px 0 4px 10px; border-left:3px solid var(--border);">
                 <span class="ts">original hypothesis:</span> {{ sh.statement }}
               </blockquote>
             {% endfor %}
@@ -147,28 +144,7 @@
     {% else %}
       {% set iq = ('?instance=' ~ selected_instance.id) if selected_instance else '' %}
       {% for n in notes %}
-        <div class="card" style="margin-bottom:10px; padding:10px; border:1px solid var(--border, #333); border-radius:6px;">
-          <div>
-            <strong>Invocation #{{ n.invocation_num }}</strong>
-            {% if n.coding_status == 'binding' %}<span class="pill ok">binding</span>
-            {% else %}<span class="pill muted">provisional</span>{% endif %}
-            {% if n.degraded %}<span class="pill bad">degraded</span>{% endif %}
-            {% if n.fleiss is not none %}<span class="small">· Fleiss κ {{ '%.2f'|format(n.fleiss) }}</span>{% endif %}
-            <span class="ts">· {{ n.created_at|relative_time }} · ${{ '%.4f'|format(n.total_cost_usd or 0) }}</span>
-          </div>
-          {% if n.note and n.note.summary %}<p class="focus" style="margin:6px 0;">{{ n.note.summary }}</p>{% endif %}
-          {% if n.note and n.note.promoted_claims %}
-            <div class="small ts">promoted claims:</div>
-            <ul style="margin-top:2px;">
-            {% for c in n.note.promoted_claims[:4] %}
-              <li>{{ c.claim }}{% if c.hypothesis %} <span class="pill muted">{{ c.hypothesis }}</span>{% endif %}</li>
-            {% endfor %}
-            </ul>
-          {% endif %}
-          <div class="small">
-            <a href="{{ url_for('session_detail', session_id=n.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a>
-          </div>
-        </div>
+        {{ ui.research_note_card(n, iq=iq, extra_ts=' · $' ~ ('%.4f'|format(n.total_cost_usd or 0))) }}
       {% endfor %}
     {% endif %}
   </section>

@@ -1,0 +1,43 @@
+{# Shared dashboard macros. Imported with `{% import "_macros.html" as ui %}`. #}
+
+{# Binding/provisional pill cluster shared by every research-note render site.
+   `note` is a row carrying coding_status / degraded / fleiss. Pass
+   with_title=true to show the explanatory tooltip on the provisional pill (the
+   single-note headers want it; the compact card listings don't). #}
+{% macro status_pill(note, with_title=false) -%}
+  {%- if note.coding_status == 'binding' -%}
+    <span class="pill ok">binding</span>
+  {%- elif with_title -%}
+    <span class="pill muted" title="The coding scheme is not yet operator-approved.">provisional</span>
+  {%- else -%}
+    <span class="pill muted">provisional</span>
+  {%- endif -%}
+  {%- if note.degraded %} <span class="pill bad">degraded</span>{% endif -%}
+  {%- if note.fleiss is defined and note.fleiss is not none %} <span class="small">· Fleiss κ {{ '%.2f'|format(note.fleiss) }}</span>{% endif -%}
+{%- endmacro %}
+
+{# Compact research-note card used in the index "all invocations" listing and on
+   the research page. `note` is the row (invocation_num, coding_status, …) and
+   `note.note` is the synthesized note payload (summary, promoted_claims).
+   claims_limit caps the promoted-claims list (unified to 5; see P3-3). `iq` is
+   the optional `?instance=…` query suffix; `extra_ts` is appended to the
+   timestamp line (the research page shows cost there, the index doesn't). #}
+{% macro research_note_card(note, iq='', claims_limit=5, extra_ts='') -%}
+  {%- set rn = note.note -%}
+  <div class="card" style="margin-bottom:10px;">
+    <div>
+      <strong>Invocation #{{ note.invocation_num }}</strong>
+      {{ status_pill(note) }}
+      <span class="ts">· {{ note.created_at|relative_time }}{{ extra_ts }}</span>
+    </div>
+    {% if rn and rn.summary %}<p class="focus" style="margin:6px 0;">{{ rn.summary }}</p>{% endif %}
+    {% if rn and rn.promoted_claims %}
+      <ul style="margin-top:2px;">
+      {% for c in rn.promoted_claims[:claims_limit] %}
+        <li>{{ c.claim }}{% if c.hypothesis %} <span class="pill muted">{{ c.hypothesis }}</span>{% endif %}</li>
+      {% endfor %}
+      </ul>
+    {% endif %}
+    <div class="small"><a href="{{ url_for('session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a></div>
+  </div>
+{%- endmacro %}

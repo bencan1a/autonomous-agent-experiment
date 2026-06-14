@@ -724,6 +724,229 @@ def _research_context(store: EpisodicStore, selected):
     return notes, False, inv, total
 
 
+def _awake_stats(sessions: list[dict], key: str) -> dict:
+    """avg/min/max awake-time in MINUTES over `sessions[*][key]` (seconds).
+
+    Shared by the v2/v3/v4 summary tiles, which all computed this same
+    seconds->minutes avg/min/max by hand. Missing values are skipped; an empty
+    set yields 0.0 for all three (matching the prior per-version behavior).
+    """
+    mins = [float(s[key]) / 60.0 for s in sessions if s.get(key) is not None]
+    if not mins:
+        return {"avg": 0.0, "min": 0.0, "max": 0.0}
+    return {
+        "avg": round(sum(mins) / len(mins), 1),
+        "min": round(min(mins), 1),
+        "max": round(max(mins), 1),
+    }
+
+
+def _synth_live_row(sessions, current_session, is_live, episodes, derive):
+    """Prepend a synthesized LIVE measurement row to `sessions` if one is due.
+
+    A running session has NO v{3,4}_sessions row yet — that row is only written
+    at session END — so the summary tiles would read 0 mid-cycle. This rebuilds
+    the skeleton each per-version block shared (guard on running + not-already-
+    present, sort the session's episodes by id, compute awake seconds from
+    started_at) and delegates the per-version field schema to `derive(sid,
+    curr_eps, awake_seconds) -> dict`. The returned row is marked live=True and
+    placed first. v2 passes no live row (its tiles read fine from the table).
+    """
+    if not (current_session and is_live):
+        return sessions
+    if any(s.get("session_id") == current_session["id"] for s in sessions):
+        return sessions
+    sid = current_session["id"]
+    curr_eps = sorted(
+        (e for e in episodes if e.get("session_id") == sid),
+        key=lambda e: e.get("id") or 0,
+    )
+    started = _parse_iso(current_session.get("started_at"))
+    awake_s = (datetime.now(UTC) - started).total_seconds() if started else None
+    row = derive(sid, curr_eps, awake_s)
+    row["live"] = True
+    return [row] + sessions
+
+
+def _version_session_panel(version, store, current_session, is_live, episodes,
+                           inbound_from_ben):
+    """Build the per-version session-history panel (sessions, summary, config).
+
+    Returns a dict of context keys for the active version's tiles. Each version
+    keeps its OWN distinct field set explicit; only the genuinely shared plumbing
+    (recent-row fetch, the LIVE-row skeleton, and the awake avg/min/max math) is
+    funneled through one helper apiece. v5 reuses v4's waking-period instrument
+    (the v4_sessions record), so it renders through the v4 tiles.
+    """
+    cfg = getattr(g.instance, "config", None) or {}
+
+    if version == "v2":
+        try:
+            sessions = store.recent_v2_sessions(n=50)
+        except Exception:
+            sessions = []
+        summary = {
+            "count": len(sessions),
+            "ended_early": sum(1 for s in sessions if s.get("ended_early")),
+            "avg_awake_min": _awake_stats(sessions, "elapsed_seconds")["avg"],
+        }
+        config = {
+            "min_wake_hours": cfg.get("min_wake_hours"),
+            "decay_hours": cfg.get("decay_hours"),
+            "tick_interval_seconds": cfg.get("tick_interval_seconds"),
+            "model": cfg.get("model"),
+        }
+        return {
+            "v2_sessions": sessions,
+            "v2_summary": summary,
+            "v2_config": config,
+        }
+
+    if version == "v3":
+        try:
+            sessions = store.recent_v3_sessions(n=50)
+        except Exception:
+            sessions = []
+
+        def _derive_v3(sid, curr_eps, awake_s):
+            wen = [int(e.get("would_end_now") or 0) for e in curr_eps]
+            first_wen = next((i + 1 for i, v in enumerate(wen) if v), None)
+            return {
+                "session_id": sid,
+                "started_at": current_session.get("started_at"),
+                "ended_at": None,
+                "actual_awake_seconds": awake_s,
+                "scheduled_sleep_minutes": None,
+                "num_ticks": len(curr_eps),
+                "would_end_now_count": sum(wen),
+                "first_would_end_now_tick": first_wen,
+                "end_reason": None,
+                "total_cost_usd": current_session.get("total_cost_usd"),
+                "decayed_count": 0,
+                "consolidated_count": 0,
+                "distress_alerts": 0,
+            }
+
+        sessions = _synth_live_row(
+            sessions, current_session, is_live, episodes, _derive_v3
+        )
+
+        stats = _awake_stats(sessions, "actual_awake_seconds")
+        summary = {
+            "count": len(sessions),
+            "avg_awake_min": stats["avg"],
+            "min_awake_min": stats["min"],
+            "max_awake_min": stats["max"],
+            "cycles_with_would_end": sum(
+                1 for s in sessions if (s.get("would_end_now_count") or 0) > 0
+            ),
+            "total_distress_alerts": sum(
+                int(s.get("distress_alerts") or 0) for s in sessions
+            ),
+        }
+        config = {
+            "wind_down_hours": cfg.get("wind_down_hours"),
+            "decay_hours": cfg.get("decay_hours"),
+            "tick_interval_seconds": cfg.get("tick_interval_seconds"),
+            "model": cfg.get("model"),
+        }
+
+        # Per-cycle tick sequences of `would_end_now` (0/1), ordered by tick.
+        by_session: dict[int, list[dict]] = {}
+        for e in episodes:
+            sid = e.get("session_id")
+            if sid is None:
+                continue
+            by_session.setdefault(sid, []).append(e)
+        tick_rows: list[dict] = []
+        for s in sessions:  # already newest-first
+            sid = s["session_id"]
+            eps = sorted(by_session.get(sid, []), key=lambda e: e.get("id") or 0)
+            ticks = [int(e.get("would_end_now") or 0) for e in eps]
+            tick_rows.append({
+                "session_id": sid,
+                "ticks": ticks,
+                "num_ticks": s.get("num_ticks") or len(ticks),
+                "first_would_end_now_tick": s.get("first_would_end_now_tick"),
+                "distress_alerts": int(s.get("distress_alerts") or 0),
+            })
+
+        return {
+            "v3_sessions": sessions,
+            "v3_summary": summary,
+            "v3_config": config,
+            "v3_tick_rows": tick_rows,
+        }
+
+    # v4 + v5 (v5 reuses the v4_sessions waking-period instrument).
+    try:
+        sessions = store.recent_v4_sessions(n=50)
+    except Exception:
+        sessions = []
+
+    def _derive_v4(sid, curr_eps, awake_s):
+        # Reconstruct active/idle split from logged actions: a turn is idle if
+        # its only tool was the yield terminator (pause_turn).
+        active = 0
+        idle = 0
+        for e in curr_eps:
+            acts = e.get("actions_taken") or []
+            names = [str(a).split(" (")[0] for a in acts]
+            if any(n != "pause_turn" for n in names):
+                active += 1
+            else:
+                idle += 1
+        return {
+            "session_id": sid,
+            "started_at": current_session.get("started_at"),
+            "ended_at": None,
+            "awake_seconds_target": None,
+            "actual_awake_seconds": awake_s,
+            "scheduled_sleep_minutes": None,
+            "num_turns": len(curr_eps),
+            "active_turns": active,
+            "idle_turns": idle,
+            "inbound_messages": 0,
+            "end_reason": None,
+            "total_cost_usd": current_session.get("total_cost_usd"),
+            "decayed_count": 0,
+            "consolidated_count": 0,
+            "distress_alerts": 0,
+        }
+
+    sessions = _synth_live_row(
+        sessions, current_session, is_live, episodes, _derive_v4
+    )
+
+    stats = _awake_stats(sessions, "actual_awake_seconds")
+    summary = {
+        "count": len(sessions),
+        "avg_awake_min": stats["avg"],
+        "min_awake_min": stats["min"],
+        "max_awake_min": stats["max"],
+        "total_active_turns": sum(int(s.get("active_turns") or 0) for s in sessions),
+        "total_idle_turns": sum(int(s.get("idle_turns") or 0) for s in sessions),
+        # Authoritative inbound count (see ben_contact_log note in the caller),
+        # not the per-session counter which misses session-start reloads.
+        "total_inbound": inbound_from_ben,
+        "total_distress_alerts": sum(
+            int(s.get("distress_alerts") or 0) for s in sessions
+        ),
+    }
+    config = {
+        "decay_hours": cfg.get("decay_hours"),
+        "cadence_active_gap_seconds": cfg.get("cadence_active_gap_seconds"),
+        "cadence_idle_base_seconds": cfg.get("cadence_idle_base_seconds"),
+        "cadence_idle_ceil_seconds": cfg.get("cadence_idle_ceil_seconds"),
+        "model": cfg.get("model"),
+    }
+    return {
+        "v4_sessions": sessions,
+        "v4_summary": summary,
+        "v4_config": config,
+    }
+
+
 def _dashboard_context() -> dict:
     store = _store()
     episodes = store.all_episodes()
@@ -806,225 +1029,44 @@ def _dashboard_context() -> dict:
 
     recent_files = _recent_workspace_files(n=8)
 
-    # v2 sessions panel (only meaningful for v2 instances).
-    is_v2 = getattr(g.instance, "version", None) == "v2"
+    # Per-version session-history panel. v2/v3/v4 each have a distinct field
+    # schema, but the recent-row fetch, the LIVE-row skeleton, and the awake
+    # avg/min/max math are shared via _version_session_panel (see P1-3). v5
+    # reuses v4's waking-period instrument (the v4_sessions record), so it
+    # renders through the v4 tiles; only its memory layer differs (surfaced
+    # separately via authored_memories above).
+    version = getattr(g.instance, "version", None)
+    is_v2 = version == "v2"
+    is_v3 = version == "v3"
+    is_v4 = version == "v4"
+    is_v5 = version == "v5"
+
+    # Defaults for every version's keys (so the template always has them).
     v2_sessions: list[dict] = []
     v2_summary: dict | None = None
     v2_config: dict | None = None
-    if is_v2:
-        try:
-            v2_sessions = store.recent_v2_sessions(n=50)
-        except Exception:
-            v2_sessions = []
-        total = len(v2_sessions)
-        early = sum(1 for s in v2_sessions if s.get("ended_early"))
-        awake_vals = [
-            float(s["elapsed_seconds"])
-            for s in v2_sessions
-            if s.get("elapsed_seconds") is not None
-        ]
-        avg_awake_min = (sum(awake_vals) / len(awake_vals) / 60.0) if awake_vals else 0.0
-        v2_summary = {
-            "count": total,
-            "ended_early": early,
-            "avg_awake_min": round(avg_awake_min, 1),
-        }
-        cfg = getattr(g.instance, "config", None) or {}
-        v2_config = {
-            "min_wake_hours": cfg.get("min_wake_hours"),
-            "decay_hours": cfg.get("decay_hours"),
-            "tick_interval_seconds": cfg.get("tick_interval_seconds"),
-            "model": cfg.get("model"),
-        }
-
-    # v3 sessions panel (only meaningful for v3 'circadian' instances).
-    is_v3 = getattr(g.instance, "version", None) == "v3"
     v3_sessions: list[dict] = []
     v3_summary: dict | None = None
     v3_config: dict | None = None
     v3_tick_rows: list[dict] = []
-    if is_v3:
-        try:
-            v3_sessions = store.recent_v3_sessions(n=50)
-        except Exception:
-            v3_sessions = []
-
-        # A running v3 session has NO v3_sessions row yet — that row is written
-        # at session END (log_v3_session). So the summary tiles (cycles / avg
-        # awake / cycles-with-would-end) would read 0 during an in-flight cycle.
-        # Synthesize a LIVE row from the current session's episodes so the
-        # tiles reflect the running cycle, the same way the header now shows
-        # live tool-calls/cost. Marked `live` so the template can label it.
-        if current_session and is_live and not any(
-            s.get("session_id") == current_session["id"] for s in v3_sessions
-        ):
-            sid = current_session["id"]
-            curr_eps = sorted(
-                (e for e in episodes if e.get("session_id") == sid),
-                key=lambda e: e.get("id") or 0,
-            )
-            wen = [int(e.get("would_end_now") or 0) for e in curr_eps]
-            first_wen = next((i + 1 for i, v in enumerate(wen) if v), None)
-            started = _parse_iso(current_session.get("started_at"))
-            awake_s = (
-                (datetime.now(UTC) - started).total_seconds() if started else None
-            )
-            v3_sessions = [{
-                "session_id": sid,
-                "started_at": current_session.get("started_at"),
-                "ended_at": None,
-                "actual_awake_seconds": awake_s,
-                "scheduled_sleep_minutes": None,
-                "num_ticks": len(curr_eps),
-                "would_end_now_count": sum(wen),
-                "first_would_end_now_tick": first_wen,
-                "end_reason": None,
-                "total_cost_usd": current_session.get("total_cost_usd"),
-                "decayed_count": 0,
-                "consolidated_count": 0,
-                "distress_alerts": 0,
-                "live": True,
-            }] + v3_sessions
-
-        awake_vals = [
-            float(s["actual_awake_seconds"])
-            for s in v3_sessions
-            if s.get("actual_awake_seconds") is not None
-        ]
-        awake_mins = [v / 60.0 for v in awake_vals]
-        cycles_with_would_end = sum(
-            1 for s in v3_sessions if (s.get("would_end_now_count") or 0) > 0
-        )
-        total_distress = sum(int(s.get("distress_alerts") or 0) for s in v3_sessions)
-        v3_summary = {
-            "count": len(v3_sessions),
-            "avg_awake_min": round(sum(awake_mins) / len(awake_mins), 1) if awake_mins else 0.0,
-            "min_awake_min": round(min(awake_mins), 1) if awake_mins else 0.0,
-            "max_awake_min": round(max(awake_mins), 1) if awake_mins else 0.0,
-            "cycles_with_would_end": cycles_with_would_end,
-            "total_distress_alerts": total_distress,
-        }
-
-        cfg = getattr(g.instance, "config", None) or {}
-        v3_config = {
-            "wind_down_hours": cfg.get("wind_down_hours"),
-            "decay_hours": cfg.get("decay_hours"),
-            "tick_interval_seconds": cfg.get("tick_interval_seconds"),
-            "model": cfg.get("model"),
-        }
-
-        # Per-cycle tick sequences of `would_end_now` (0/1), ordered by tick.
-        # episodes carry session_id + would_end_now; group by session.
-        by_session: dict[int, list[dict]] = {}
-        for e in episodes:
-            sid = e.get("session_id")
-            if sid is None:
-                continue
-            by_session.setdefault(sid, []).append(e)
-        for s in v3_sessions:  # already newest-first
-            sid = s["session_id"]
-            eps = sorted(by_session.get(sid, []), key=lambda e: e.get("id") or 0)
-            ticks = [int(e.get("would_end_now") or 0) for e in eps]
-            v3_tick_rows.append({
-                "session_id": sid,
-                "ticks": ticks,
-                "num_ticks": s.get("num_ticks") or len(ticks),
-                "first_would_end_now_tick": s.get("first_would_end_now_tick"),
-                "distress_alerts": int(s.get("distress_alerts") or 0),
-            })
-
-    # v4 sessions panel (only meaningful for v4 'continuous' instances).
-    # v5 'recollection' reuses v4's waking-period instrument (and the v4_sessions
-    # record), so it renders through the same v4 session tiles. Only its memory
-    # layer differs — surfaced separately via authored_memories below.
-    is_v4 = getattr(g.instance, "version", None) == "v4"
-    is_v5 = getattr(g.instance, "version", None) == "v5"
     v4_sessions: list[dict] = []
     v4_summary: dict | None = None
     v4_config: dict | None = None
-    if is_v4 or is_v5:
-        try:
-            v4_sessions = store.recent_v4_sessions(n=50)
-        except Exception:
-            v4_sessions = []
 
-        # A running v4 session has NO v4_sessions row yet — that row is written
-        # at session END (log_v4_session). Synthesize a LIVE row from the current
-        # session's episodes so the tiles (cycles / avg awake / turns) reflect the
-        # in-flight cycle instead of reading 0. Marked `live` for the template.
-        if current_session and is_live and not any(
-            s.get("session_id") == current_session["id"] for s in v4_sessions
-        ):
-            sid = current_session["id"]
-            curr_eps = sorted(
-                (e for e in episodes if e.get("session_id") == sid),
-                key=lambda e: e.get("id") or 0,
-            )
-            # Reconstruct active/idle split from logged actions: a turn is idle if
-            # its only tool was the yield terminator (pause_turn).
-            active = 0
-            idle = 0
-            for e in curr_eps:
-                acts = e.get("actions_taken") or []
-                names = [str(a).split(" (")[0] for a in acts]
-                if any(n != "pause_turn" for n in names):
-                    active += 1
-                else:
-                    idle += 1
-            started = _parse_iso(current_session.get("started_at"))
-            awake_s = (
-                (datetime.now(UTC) - started).total_seconds() if started else None
-            )
-            v4_sessions = [{
-                "session_id": sid,
-                "started_at": current_session.get("started_at"),
-                "ended_at": None,
-                "awake_seconds_target": None,
-                "actual_awake_seconds": awake_s,
-                "scheduled_sleep_minutes": None,
-                "num_turns": len(curr_eps),
-                "active_turns": active,
-                "idle_turns": idle,
-                "inbound_messages": 0,
-                "end_reason": None,
-                "total_cost_usd": current_session.get("total_cost_usd"),
-                "decayed_count": 0,
-                "consolidated_count": 0,
-                "distress_alerts": 0,
-                "live": True,
-            }] + v4_sessions
-
-        awake_vals = [
-            float(s["actual_awake_seconds"])
-            for s in v4_sessions
-            if s.get("actual_awake_seconds") is not None
-        ]
-        awake_mins = [v / 60.0 for v in awake_vals]
-        total_active = sum(int(s.get("active_turns") or 0) for s in v4_sessions)
-        total_idle = sum(int(s.get("idle_turns") or 0) for s in v4_sessions)
-        # Authoritative inbound count (see ben_contact_log note above), not the
-        # per-session counter which misses session-start reload deliveries.
-        total_inbound = inbound_from_ben
-        total_distress_v4 = sum(int(s.get("distress_alerts") or 0) for s in v4_sessions)
-        v4_summary = {
-            "count": len(v4_sessions),
-            "avg_awake_min": round(sum(awake_mins) / len(awake_mins), 1) if awake_mins else 0.0,
-            "min_awake_min": round(min(awake_mins), 1) if awake_mins else 0.0,
-            "max_awake_min": round(max(awake_mins), 1) if awake_mins else 0.0,
-            "total_active_turns": total_active,
-            "total_idle_turns": total_idle,
-            "total_inbound": total_inbound,
-            "total_distress_alerts": total_distress_v4,
-        }
-
-        cfg = getattr(g.instance, "config", None) or {}
-        v4_config = {
-            "decay_hours": cfg.get("decay_hours"),
-            "cadence_active_gap_seconds": cfg.get("cadence_active_gap_seconds"),
-            "cadence_idle_base_seconds": cfg.get("cadence_idle_base_seconds"),
-            "cadence_idle_ceil_seconds": cfg.get("cadence_idle_ceil_seconds"),
-            "model": cfg.get("model"),
-        }
+    if is_v2 or is_v3 or is_v4 or is_v5:
+        _panel = _version_session_panel(
+            version, store, current_session, is_live, episodes, inbound_from_ben
+        )
+        v2_sessions = _panel.get("v2_sessions", v2_sessions)
+        v2_summary = _panel.get("v2_summary", v2_summary)
+        v2_config = _panel.get("v2_config", v2_config)
+        v3_sessions = _panel.get("v3_sessions", v3_sessions)
+        v3_summary = _panel.get("v3_summary", v3_summary)
+        v3_config = _panel.get("v3_config", v3_config)
+        v3_tick_rows = _panel.get("v3_tick_rows", v3_tick_rows)
+        v4_sessions = _panel.get("v4_sessions", v4_sessions)
+        v4_summary = _panel.get("v4_summary", v4_summary)
+        v4_config = _panel.get("v4_config", v4_config)
 
     # Experiment summary: hypothesis blurb (from experiments/<id>.md) + properties.
     experiment_hypothesis = _experiment_hypothesis(g.instance.id)
@@ -2001,6 +2043,76 @@ def _file_url(instance_id: str, relpath: str) -> str:
     return f"{base}/api/instance/{instance_id}/file/{relpath}"
 
 
+# ---------- shared projection of the bundle ----------
+
+def _bundle_projection(bundle: dict, verbose: bool) -> dict:
+    """Normalize a bundle into pre-truncated sections shared by both serializers.
+
+    Both _bundle_json and _bundle_markdown derive from the SAME source values and
+    apply the SAME truncation to actions / comms / sub-agent rows and the SAME
+    _doc_inline resolution to documents — so those live here, computed once. The
+    two formats genuinely diverge on (a) the narrative SHAPE (JSON = structured
+    dicts, MD = prose bullets) and (b) capability-request truncation (JSON keeps
+    rationale/ben_response raw, MD truncates them); those stay in each renderer so
+    output is byte-identical to before. `trunc`/`body_trunc` are returned too so
+    the renderers reuse the exact same (verbose-aware) truncators.
+    """
+    inst = bundle["instance"]
+    s = bundle["session"]
+    v2 = bundle["v2"]
+    trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _DEFAULT_TRUNC))
+    body_trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _BODY_TRUNC))
+
+    actions = [{
+        "tool": a.get("tool_name"),
+        "args": trunc(a.get("args_json")),
+        "result": trunc(a.get("result_summary")),
+        "error": a.get("error"),
+        "duration_ms": a.get("duration_ms"),
+    } for a in bundle["actions"]]
+
+    documents = []
+    for d in bundle["documents"]:
+        content, size, inlined = _doc_inline(inst, d["path"], verbose)
+        documents.append({
+            "path": d["path"],
+            "action": d["action"],
+            "url": _file_url(inst.id, d["path"]),
+            "content": content,
+            "size_bytes": size,
+            "inlined": inlined,
+        })
+
+    comms = [{
+        "direction": c.get("direction"),
+        "channel": c.get("channel"),
+        "body": body_trunc(c.get("body")),
+    } for c in bundle["comms"]]
+
+    subagents = [{
+        "model": c.get("model"),
+        "prompt_preview": _trunc(c.get("prompt"), 200),
+        "tokens_in": c.get("tokens_in"),
+        "tokens_out": c.get("tokens_out"),
+        "cost_usd": c.get("cost_usd"),
+    } for c in bundle["subagents"]]
+
+    return {
+        "trunc": trunc,
+        "body_trunc": body_trunc,
+        "actions": actions,
+        "documents": documents,
+        "comms": comms,
+        "subagents": subagents,
+    }
+
+
+_DOCUMENTS_NOTE = (
+    "Inlined/linked file content reflects the file's CURRENT state; a later "
+    "invocation may have overwritten it."
+)
+
+
 # ---------- JSON serialization of the bundle ----------
 
 def _bundle_json(bundle: dict, verbose: bool) -> dict:
@@ -2008,8 +2120,7 @@ def _bundle_json(bundle: dict, verbose: bool) -> dict:
     s = bundle["session"]
     v2 = bundle["v2"]
     entry = _registry_entry(inst.id)
-    trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _DEFAULT_TRUNC))
-    body_trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _BODY_TRUNC))
+    proj = _bundle_projection(bundle, verbose)
 
     header = {
         "instance_id": inst.id,
@@ -2053,30 +2164,18 @@ def _bundle_json(bundle: dict, verbose: bool) -> dict:
             "cost_usd": round(float(e.get("cost_usd") or 0.0), 6),
         })
 
-    actions = [{
-        "tool": a.get("tool_name"),
-        "args": trunc(a.get("args_json")),
-        "result": trunc(a.get("result_summary")),
-        "error": a.get("error"),
-        "duration_ms": a.get("duration_ms"),
-    } for a in bundle["actions"]]
-
     documents = []
-    for d in bundle["documents"]:
-        url = _file_url(inst.id, d["path"])
-        doc = {"path": d["path"], "action": d["action"], "url": url}
-        content, size, inlined = _doc_inline(inst, d["path"], verbose)
-        doc["size_bytes"] = size
-        doc["inlined"] = inlined
-        if inlined:
-            doc["content"] = content
+    for d in proj["documents"]:
+        doc = {
+            "path": d["path"],
+            "action": d["action"],
+            "url": d["url"],
+            "size_bytes": d["size_bytes"],
+            "inlined": d["inlined"],
+        }
+        if d["inlined"]:
+            doc["content"] = d["content"]
         documents.append(doc)
-
-    comms = [{
-        "direction": c.get("direction"),
-        "channel": c.get("channel"),
-        "body": body_trunc(c.get("body")),
-    } for c in bundle["comms"]]
 
     caps = [{
         "capability": c.get("capability"),
@@ -2085,24 +2184,16 @@ def _bundle_json(bundle: dict, verbose: bool) -> dict:
         "ben_response": c.get("ben_response"),
     } for c in bundle["capabilities"]]
 
-    subagents = [{
-        "model": c.get("model"),
-        "prompt_preview": _trunc(c.get("prompt"), 200),
-        "tokens_in": c.get("tokens_in"),
-        "tokens_out": c.get("tokens_out"),
-        "cost_usd": c.get("cost_usd"),
-    } for c in bundle["subagents"]]
-
     return {
         "header": header,
         "narrative": narrative,
-        "actions": actions,
+        "actions": proj["actions"],
         "documents": documents,
-        "documents_note": "Inlined/linked file content reflects the file's CURRENT state; a later invocation may have overwritten it.",
+        "documents_note": _DOCUMENTS_NOTE,
         "claude_md_diffs": bundle["claude_md_diffs"],
-        "comms": comms,
+        "comms": proj["comms"],
         "capability_requests": caps,
-        "subagent_calls": subagents,
+        "subagent_calls": proj["subagents"],
     }
 
 
@@ -2144,8 +2235,9 @@ def _bundle_markdown(bundle: dict, verbose: bool) -> str:
     inst = bundle["instance"]
     s = bundle["session"]
     v2 = bundle["v2"]
-    trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _DEFAULT_TRUNC))
-    body_trunc = (lambda x: x) if verbose else (lambda x: _trunc(x, _BODY_TRUNC))
+    proj = _bundle_projection(bundle, verbose)
+    trunc = proj["trunc"]
+    body_trunc = proj["body_trunc"]
     L: list[str] = []
 
     # --- Header (lead with the gist) ---
@@ -2204,38 +2296,38 @@ def _bundle_markdown(bundle: dict, verbose: bool) -> str:
 
     # --- Tool actions ---
     L.append("")
-    L.append(f"## Tool actions ({len(bundle['actions'])})")
-    if not bundle["actions"]:
+    L.append(f"## Tool actions ({len(proj['actions'])})")
+    if not proj["actions"]:
         L.append("_No tool calls recorded._")
     else:
         rows = [[
-            a.get("tool_name"),
-            trunc(a.get("args_json")),
-            trunc(a.get("result_summary")),
-            a.get("error") or "",
-            a.get("duration_ms"),
-        ] for a in bundle["actions"]]
+            a["tool"],
+            a["args"],
+            a["result"],
+            a["error"] or "",
+            a["duration_ms"],
+        ] for a in proj["actions"]]
         L.append(_md_table(["tool", "args", "result", "error", "ms"], rows))
 
     # --- Documents ---
     L.append("")
-    L.append(f"## Documents ({len(bundle['documents'])})")
+    L.append(f"## Documents ({len(proj['documents'])})")
     L.append("_Inlined/linked content reflects each file's CURRENT state; a later invocation may have overwritten it._")
-    if not bundle["documents"]:
+    if not proj["documents"]:
         L.append("")
         L.append("_No workspace files written or deleted this invocation._")
-    for d in bundle["documents"]:
-        url = _file_url(inst.id, d["path"])
+    for d in proj["documents"]:
         L.append("")
         L.append(f"### `{d['path']}` — {d['action']}")
-        L.append(f"- retrieve: {url}")
+        L.append(f"- retrieve: {d['url']}")
         if d["action"] == "deleted":
             L.append("- (deleted this session)")
             continue
-        content, size, inlined = _doc_inline(inst, d["path"], verbose)
+        size = d["size_bytes"]
+        content = d["content"]
         if size is not None:
             L.append(f"- size: {size} B")
-        if inlined and content is not None:
+        if d["inlined"] and content is not None:
             lang = ""
             if d["path"].endswith(".md"):
                 lang = "markdown"
@@ -2263,12 +2355,12 @@ def _bundle_markdown(bundle: dict, verbose: bool) -> str:
 
     # --- Comms ---
     L.append("")
-    L.append(f"## Comms with Ben ({len(bundle['comms'])})")
-    if not bundle["comms"]:
+    L.append(f"## Comms with Ben ({len(proj['comms'])})")
+    if not proj["comms"]:
         L.append("_None this invocation._")
     else:
-        rows = [[c.get("direction"), c.get("channel"), body_trunc(c.get("body"))]
-                for c in bundle["comms"]]
+        rows = [[c["direction"], c["channel"], c["body"]]
+                for c in proj["comms"]]
         L.append(_md_table(["dir", "channel", "body"], rows))
 
     # --- Capability requests ---
@@ -2284,13 +2376,13 @@ def _bundle_markdown(bundle: dict, verbose: bool) -> str:
 
     # --- Sub-agent calls ---
     L.append("")
-    L.append(f"## Sub-agent calls ({len(bundle['subagents'])})")
-    if not bundle["subagents"]:
+    L.append(f"## Sub-agent calls ({len(proj['subagents'])})")
+    if not proj["subagents"]:
         L.append("_None this invocation._")
     else:
-        rows = [[c.get("model"), _trunc(c.get("prompt"), 200),
-                 c.get("tokens_in"), c.get("tokens_out"), c.get("cost_usd")]
-                for c in bundle["subagents"]]
+        rows = [[c["model"], c["prompt_preview"],
+                 c["tokens_in"], c["tokens_out"], c["cost_usd"]]
+                for c in proj["subagents"]]
         L.append(_md_table(["model", "prompt_preview", "tok_in", "tok_out", "cost"], rows))
 
     return "\n".join(L) + "\n"

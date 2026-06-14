@@ -1,12 +1,9 @@
 {% extends "_base.html" %}
 
 {% block head_extra %}
-  {# Live auto-refresh while a session is actively running. #}
-  {% if is_live %}<meta http-equiv="refresh" content="20">{% endif %}
-{% endblock %}
-
-{% block header_meta %}
-  &nbsp; {{ episode_count }} episode{{ '' if episode_count==1 else 's' }}
+  {# Pausable JS auto-refresh while live (shared controller in _base.html) —
+     replaces a raw <meta refresh> that wiped open <details>/scroll mid-read. #}
+  {% if is_live %}<script>window.AUTO_REFRESH_SECONDS = 20;</script>{% endif %}
 {% endblock %}
 
 {% block main %}
