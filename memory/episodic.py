@@ -14,11 +14,11 @@ Tables:
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from memory.sqlite_base import _conn as _open_conn, run_idempotent_alters
 
 UTC = timezone.utc
 
@@ -231,25 +231,13 @@ class EpisodicStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+        return _open_conn(self.db_path)
 
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
-            for stmt in _EPISODE_ALTERS:
-                try:
-                    conn.execute(stmt)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column" not in str(e).lower():
-                        raise
+            run_idempotent_alters(conn, _EPISODE_ALTERS)
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = 'start_date'"
             ).fetchone()

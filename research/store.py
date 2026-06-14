@@ -3,8 +3,10 @@
 Opens the SAME ``instances/<id>/data/episodes.db`` as the episodic store (single
 file keeps the dashboard simple) but owns its own ``CREATE TABLE IF NOT EXISTS``
 schema — keeping ``memory/episodic.py`` (the subject's memory surface) focused.
-Mirrors that module's ``sqlite3`` + ``row_factory`` + ``@contextmanager``
-conventions. Schema is created idempotently on init, so no migration step.
+Shares the connection lifecycle + idempotent-ALTER plumbing with the episodic
+store via ``memory.sqlite_base`` (one source of truth for the ``sqlite3`` +
+``row_factory`` + ``@contextmanager`` conventions). Schema is created
+idempotently on init.
 
 Tables (phase 1, built now):
   research_prereg      — one operationalized coding scheme per (experiment, spec_hash)
@@ -21,10 +23,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from memory.sqlite_base import _conn as _open_conn, run_idempotent_alters
 
 UTC = timezone.utc
 
@@ -173,22 +176,10 @@ class ResearchStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(RESEARCH_SCHEMA)
-            for stmt in _RESEARCH_ALTERS:
-                try:
-                    conn.execute(stmt)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column" not in str(e).lower():
-                        raise
+            run_idempotent_alters(conn, _RESEARCH_ALTERS)
 
-    @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+        return _open_conn(self.db_path)
 
     # ---------- prereg / coding scheme ----------
 
