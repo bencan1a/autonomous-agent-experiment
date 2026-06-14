@@ -65,11 +65,21 @@ worktree streams; the suite is **15/15 green** on `main`. Summary:
   into `_v4-base.md`/`_v5-base.md` with **every yaml spec block byte-identical** (all 5
   `spec_hash`es verified unchanged — no panel reverts to pending_approval).
 
+**P1-3 dashboard split COMPLETED (2026-06-14, follow-up).** `dashboard/app.py` went
+2663 → ~280 lines: data-assembly + serializers now in `dashboard/data.py`; routes in
+`dashboard/views/{html,control,api}.py` blueprints; `app.py` is the factory + lifecycle +
+filters + registration. Endpoints are blueprint-qualified (`html.*`/`control.*`/`api.*`) and
+all template `url_for` calls updated. Guarded by a new `tests/test_dashboard.py` (7 scenarios,
+Flask test_client) written FIRST as a safety net. Markdown/JSON API output verified
+byte-identical. Also fixed two latent issues found via a live run-as-script test against real
+data: `_control_authorized` moved to `data.py` (the control blueprint no longer lazily imports
+the app, which would have double-loaded it run-as-script), and `template_folder` made absolute
+(a relative one 500s the no-instances page unless launched with an absolute script path).
+
 **Open follow-ups (not blocking):**
 - `experiments/v3-circadian.md`'s formal spec block is **NEW and needs operator approval**
   (its hash is unapproved by design — run the operationalize/approve flow).
-- Full-repo logger-var sweep (P3-2) and the dashboard blueprint split (P1-3 stretch) were
-  intentionally left out of scope.
+- Full-repo logger-var sweep (P3-2) was intentionally scoped to the session-loop files only.
 - Repo-root `README.md` still describes v1/v2 conceptually (only `experiments/README.md` was
   updated to v1–v5).
 
