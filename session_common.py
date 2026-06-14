@@ -18,6 +18,7 @@ import os
 import re
 from typing import Any
 
+from agent_tools.comms import send_capability_request
 from communications.slack_client import SlackClient
 from memory.episodic import EpisodicStore
 
@@ -58,18 +59,12 @@ def _execute_side_effects(
             episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=dm)
     cap = ts.get("capability_request")
     if isinstance(cap, dict) and cap.get("capability"):
-        cap_id = episodic.log_capability_request(
-            invocation_num=invocation_num,
-            capability=cap.get("capability"),
-            rationale=cap.get("rationale", "") or "",
+        # Shared owner of the capability-request side effect (canonical Slack
+        # wording + logging); same path as the v1 request_capability tool.
+        send_capability_request(
+            episodic, slack, invocation_num,
+            cap.get("capability"), cap.get("rationale", "") or "",
         )
-        if slack:
-            msg = (
-                f":key: *Capability request (id={cap_id})*\n"
-                f"capability: `{cap.get('capability')}`\nrationale: {cap.get('rationale','')}"
-            )
-            if slack.dm_ben(msg):
-                episodic.log_ben_contact(invocation_num=invocation_num, direction="out", channel="dm", body=msg)
 
 
 # --------------------------------------------------------------------------- #

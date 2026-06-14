@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_tools.web import _as_int
+
 
 def query_episodic_memory(query: str, k: int = 5, *, ctx: Any) -> dict[str, Any]:
+    k = _as_int(k, default=5, lo=1, hi=50)
     hits = ctx.semantic.search(query, k=k)
     return {
         "results": [
@@ -21,6 +24,7 @@ def query_episodic_memory(query: str, k: int = 5, *, ctx: Any) -> dict[str, Any]
 
 
 def recent_episodes(n: int = 5, *, ctx: Any) -> dict[str, Any]:
+    n = _as_int(n, default=5, lo=1, hi=50)
     eps = ctx.episodic.recent_episodes(n=n)
     return {
         "episodes": [

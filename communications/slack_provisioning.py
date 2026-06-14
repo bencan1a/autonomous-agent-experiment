@@ -1,9 +1,13 @@
 """Slack-admin helpers for per-instance channel provisioning.
 
-Each instance owns three channels:
-  <instance_id>-notes   — agent's journal (agent -> readers)
-  <instance_id>-mirror  — silent episode mirror (system -> readers)
+Each instance owns four channels:
+  <instance_id>-notes    — agent's journal (agent -> readers)
+  <instance_id>-mirror   — silent episode mirror (system -> readers)
   <instance_id>-chat     — two-way agent<->Ben conversation
+  <instance_id>-advisory — operator-only research-assistant advice on how to
+                           respond when the agent reaches out. Only
+                           run_advisory_watch wires it; the session loops
+                           deliberately do NOT post to it.
 
 These helpers are pure Slack admin (create / look-up / join / invite / set-purpose
 / archive). They are intended to be driven by ``instance_manager`` and never by the
@@ -55,11 +59,13 @@ def provision_instance_channels(
     ben_user_id: str,
     private: bool = False,
 ) -> dict[str, str | None]:
-    """Create (or reuse) the three per-instance channels.
+    """Create (or reuse) the four per-instance channels.
 
-    Returns ``{"notes_channel", "mirror_channel", "chat_channel"}`` mapping to
-    channel ids. Idempotent: an existing channel (``name_taken``) is reused by
-    looking up its id. Raises if a channel can neither be created nor found.
+    Returns ``{"notes_channel", "mirror_channel", "chat_channel",
+    "advisory_channel"}`` mapping to channel ids (advisory is operator-only:
+    only run_advisory_watch wires it; session loops deliberately do not).
+    Idempotent: an existing channel (``name_taken``) is reused by looking up its
+    id. Raises if a channel can neither be created nor found.
     """
     client = WebClient(token=bot_token)
     result: dict[str, str | None] = {

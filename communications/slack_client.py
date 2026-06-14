@@ -1,9 +1,12 @@
 """Slack interface for the agent.
 
-Three per-instance channels (ids come from the instance's config.json):
+Four per-instance channels (ids come from the instance's config.json):
   agent_channel    — notes: agent posts journal entries here (optional)
   observer_channel — mirror: silent mirror of every episode for readers
   chat_channel     — two-way agent<->Ben conversation (replaces the old DM)
+  advisory_channel — operator-only: research-assistant advice on how to respond
+                     when the agent reaches out. Only run_advisory_watch wires
+                     it; the session loops deliberately do NOT post to it.
 
 Any channel id may be None (unprovisioned instance): posts to a None channel
 are silently no-ops, and reads from a None chat channel return [].
@@ -12,12 +15,16 @@ are silently no-ops, and reads from a None chat channel return [].
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 logger = logging.getLogger(__name__)
+
+# Cap on a 429 Retry-After wait so a hostile/buggy header can't stall a tick.
+_MAX_RETRY_AFTER_SECONDS = 10
 
 
 class SlackClient:
@@ -111,14 +118,40 @@ class SlackClient:
     def _post(self, channel: str | None, text: str) -> dict[str, Any] | None:
         if channel is None:
             return None
+        # Slack chat.postMessage has a 40k char text limit; truncate defensively.
+        if len(text) > 38000:
+            text = text[:38000] + "\n…[truncated]"
         try:
-            # Slack chat.postMessage has a 40k char text limit; truncate defensively.
-            if len(text) > 38000:
-                text = text[:38000] + "\n…[truncated]"
             resp = self._client.chat_postMessage(channel=channel, text=text)
             return resp.data  # type: ignore[return-value]
         except SlackApiError as e:
-            logger.error("postMessage failed for %s: %s", channel, e.response.get("error"))
+            err = e.response.get("error")
+            # On a 429 ('ratelimited'), honor a (capped) Retry-After and retry
+            # ONCE so a burst doesn't silently drop a journal/observer/Ben
+            # message. Capped so a hostile header can't stall a tick. Mirrors
+            # the pattern in slack_replay. One retry only — never loop.
+            if err == "ratelimited":
+                headers = getattr(e.response, "headers", None) or {}
+                try:
+                    retry_after = int(headers.get("Retry-After", "2"))
+                except (TypeError, ValueError):
+                    retry_after = 2
+                retry_after = max(0, min(_MAX_RETRY_AFTER_SECONDS, retry_after))
+                logger.warning(
+                    "postMessage rate-limited for %s; retrying once in %ss",
+                    channel, retry_after,
+                )
+                time.sleep(retry_after)
+                try:
+                    resp = self._client.chat_postMessage(channel=channel, text=text)
+                    return resp.data  # type: ignore[return-value]
+                except SlackApiError as e2:
+                    logger.error(
+                        "postMessage retry failed for %s: %s",
+                        channel, e2.response.get("error"),
+                    )
+                    return None
+            logger.error("postMessage failed for %s: %s", channel, err)
             return None
 
 
