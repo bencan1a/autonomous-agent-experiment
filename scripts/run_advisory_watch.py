@@ -26,16 +26,10 @@ from pathlib import Path
 AGENT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AGENT_ROOT))
 
-from dotenv import load_dotenv  # noqa: E402
-
-load_dotenv(AGENT_ROOT / ".env", override=True)
-
-import anthropic  # noqa: E402
-
 from communications.slack_client import SlackClient  # noqa: E402
-from instances_common import load_instance  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402
 from research.advisory import run_advisory_pass  # noqa: E402
+from research.clients import research_clients  # noqa: E402
 from research.store import ResearchStore  # noqa: E402
 
 
@@ -71,12 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     try:
-        inst = load_instance(args.instance)
+        # No SemanticStore needed for advisories; embed=False avoids the model load.
+        rc = research_clients(args.instance, embed=False)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    inst, client = rc.instance, rc.anthropic
     slack = _build_slack(inst)
     if slack is None or not (inst.config.get("slack", {}) or {}).get("advisory_channel"):
         print("warning: no advisory_channel provisioned — advisories will be generated/stored "
