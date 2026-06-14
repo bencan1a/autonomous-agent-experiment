@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block main %}
-  <p class="small">Detailed logs for {{ selected_instance.name if selected_instance else g.instance.name }}. <a href="{{ url_for('index') }}{{ ('?instance=' ~ selected_instance.id) if selected_instance else '' }}">← overview</a></p>
+  <p class="small">Detailed logs for {{ selected_instance.name if selected_instance else g.instance.name }}. <a href="{{ url_for('html.index') }}{{ ('?instance=' ~ selected_instance.id) if selected_instance else '' }}">← overview</a></p>
 
   {# ---------------- Internal state over time ---------------- #}
   <section class="wide">
@@ -57,7 +57,7 @@
         <div class="stat">
           <div class="label">session</div>
           <div class="value">
-            <a href="{{ url_for('session_detail', session_id=current_session.id, instance=selected_instance.id if selected_instance else None) }}">#{{ current_session.id }}</a>
+            <a href="{{ url_for('html.session_detail', session_id=current_session.id, instance=selected_instance.id if selected_instance else None) }}">#{{ current_session.id }}</a>
           </div>
           <div class="ts">invocation #{{ current_session.invocation_num }}</div>
         </div>
@@ -114,7 +114,7 @@
         No active session.
         {% if recent_sessions %}
           Most recent:
-          <a href="{{ url_for('session_detail', session_id=recent_sessions[0].id, instance=selected_instance.id if selected_instance else None) }}">
+          <a href="{{ url_for('html.session_detail', session_id=recent_sessions[0].id, instance=selected_instance.id if selected_instance else None) }}">
             session #{{ recent_sessions[0].id }}
           </a>
           ({{ recent_sessions[0].ended_at|relative_time if recent_sessions[0].ended_at else 'unknown' }})
@@ -125,7 +125,7 @@
 
   {# ---------------- Activities: recent actions / episode timeline ---------------- #}
   <section class="wide">
-    <h2>Recent actions <span class="small">(last 50 · <a href="{{ url_for('actions_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
+    <h2>Recent actions <span class="small">(last 50 · <a href="{{ url_for('html.actions_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
     {% if recent_actions %}
       <div class="scrollbox">
       <table>
@@ -141,7 +141,7 @@
         {% for a in recent_actions %}
           <tr>
             <td class="ts nowrap">{{ a.timestamp|relative_time }}</td>
-            <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
             <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
             <td>
               {% if a.error %}<span class="err">{{ a.error|truncate_chars(120) }}</span>
@@ -179,7 +179,7 @@
         <tbody>
         {% for s in recent_sessions %}
           <tr>
-            <td><a href="{{ url_for('session_detail', session_id=s.id, instance=selected_instance.id if selected_instance else None) }}">#{{ s.id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=s.id, instance=selected_instance.id if selected_instance else None) }}">#{{ s.id }}</a></td>
             <td>#{{ s.invocation_num }}</td>
             <td class="ts">{{ s.started_at|fmt_dt }}</td>
             <td class="ts">{{ s.ended_at|fmt_dt if s.ended_at else 'running' }}</td>
@@ -205,7 +205,7 @@
 
   {# ---------------- Sub-agent calls ---------------- #}
   <section class="wide">
-    <h2>Sub-agent calls <span class="small">(last {{ recent_subagent_calls|length }} · <a href="{{ url_for('subagents_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
+    <h2>Sub-agent calls <span class="small">(last {{ recent_subagent_calls|length }} · <a href="{{ url_for('html.subagents_log', instance=selected_instance.id if selected_instance else None) }}">full log</a>)</span></h2>
     {% if recent_subagent_calls %}
       <div class="scrollbox">
       <table>
@@ -224,7 +224,7 @@
         {% for c in recent_subagent_calls %}
           <tr>
             <td class="ts">{{ c.timestamp|fmt_dt }}</td>
-            <td><a href="{{ url_for('session_detail', session_id=c.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ c.session_id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=c.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ c.session_id }}</a></td>
             <td>{{ c.model or '—' }}</td>
             <td>{{ (c.prompt or '')|truncate_chars(80) }}</td>
             <td>{{ (c.response or '')|truncate_chars(80) }}</td>
@@ -297,7 +297,7 @@
 
   {# ---------------- Workspace ---------------- #}
   <section class="wide">
-    <h2>Workspace files <span class="small">· <a href="{{ url_for('workspace_index', instance=selected_instance.id if selected_instance else None) }}">full browser</a></span></h2>
+    <h2>Workspace files <span class="small">· <a href="{{ url_for('html.workspace_index', instance=selected_instance.id if selected_instance else None) }}">full browser</a></span></h2>
     {% if recent_files %}
       <table>
         <thead>
@@ -311,13 +311,13 @@
         <tbody>
         {% for f in recent_files %}
           <tr>
-            <td><a href="{{ url_for('workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">{{ f.relpath }}</a></td>
+            <td><a href="{{ url_for('html.workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">{{ f.relpath }}</a></td>
             <td style="text-align:right;" class="num">{{ f.size|fmt_bytes }}</td>
             <td class="ts nowrap">{{ f.mtime|relative_time }}</td>
             <td>
-              <a href="{{ url_for('workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">view</a>
+              <a href="{{ url_for('html.workspace_view', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">view</a>
               &nbsp;
-              <a href="{{ url_for('workspace_raw', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">raw</a>
+              <a href="{{ url_for('html.workspace_raw', relpath=f.relpath, instance=selected_instance.id if selected_instance else None) }}">raw</a>
             </td>
           </tr>
         {% endfor %}

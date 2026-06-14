@@ -38,6 +38,6 @@
       {% endfor %}
       </ul>
     {% endif %}
-    <div class="small"><a href="{{ url_for('session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a></div>
+    <div class="small"><a href="{{ url_for('html.session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a></div>
   </div>
 {%- endmacro %}

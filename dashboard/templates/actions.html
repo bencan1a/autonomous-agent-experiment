@@ -8,10 +8,10 @@
     <div class="small" style="margin-bottom: 8px;">
       Newest first. Adjust limit via <code>?limit=N</code> (max 1000).
       Jump:
-      <a href="{{ url_for('actions_log', limit=50, instance=selected_instance.id if selected_instance else None) }}">50</a> ·
-      <a href="{{ url_for('actions_log', limit=200, instance=selected_instance.id if selected_instance else None) }}">200</a> ·
-      <a href="{{ url_for('actions_log', limit=500, instance=selected_instance.id if selected_instance else None) }}">500</a> ·
-      <a href="{{ url_for('actions_log', limit=1000, instance=selected_instance.id if selected_instance else None) }}">1000</a>
+      <a href="{{ url_for('html.actions_log', limit=50, instance=selected_instance.id if selected_instance else None) }}">50</a> ·
+      <a href="{{ url_for('html.actions_log', limit=200, instance=selected_instance.id if selected_instance else None) }}">200</a> ·
+      <a href="{{ url_for('html.actions_log', limit=500, instance=selected_instance.id if selected_instance else None) }}">500</a> ·
+      <a href="{{ url_for('html.actions_log', limit=1000, instance=selected_instance.id if selected_instance else None) }}">1000</a>
     </div>
     {% if actions %}
       <table>
@@ -30,7 +30,7 @@
           <tr>
             <td class="ts">{{ a.id }}</td>
             <td class="ts">{{ a.timestamp|fmt_dt }}</td>
-            <td><a href="{{ url_for('session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=a.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ a.session_id }}</a></td>
             <td><span class="tool {{ a.tool_name|tool_category }}">{{ a.tool_name or '—' }}</span></td>
             <td>
               {% if a.args_json %}

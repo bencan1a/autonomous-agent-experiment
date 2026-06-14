@@ -149,12 +149,13 @@ def scenario_no_instances():
 # The 13 endpoints templates reference via url_for. This guard fails loudly if a
 # refactor renames an endpoint without updating it everywhere.
 _TEMPLATE_ENDPOINTS = [
-    ("index", {}), ("logs", {}), ("research_view", {}), ("actions_log", {}),
-    ("claude_md_view", {}), ("subagents_log", {}), ("workspace_index", {}),
-    ("prompt_view", {}), ("resume", {}), ("create_instance", {}),
-    ("session_detail", {"session_id": 1}),
-    ("workspace_view", {"relpath": "AGENTS.md"}),
-    ("workspace_raw", {"relpath": "AGENTS.md"}),
+    ("html.index", {}), ("html.logs", {}), ("html.research_view", {}),
+    ("html.actions_log", {}), ("html.claude_md_view", {}),
+    ("html.subagents_log", {}), ("html.workspace_index", {}),
+    ("html.prompt_view", {}), ("control.resume", {}), ("control.create_instance", {}),
+    ("html.session_detail", {"session_id": 1}),
+    ("html.workspace_view", {"relpath": "AGENTS.md"}),
+    ("html.workspace_raw", {"relpath": "AGENTS.md"}),
 ]
 
 

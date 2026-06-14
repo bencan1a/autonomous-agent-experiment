@@ -42,7 +42,7 @@
         <button type="button" class="ctl-toggle pill-btn" onclick="toggleCtl()"
                 style="margin-left:8px;">{{ 'Resume' if paused else 'Pause' }}</button>
         <form id="ctl-form" method="POST"
-              action="{{ url_for('resume' if paused else 'pause', instance=selected_instance.id) }}"
+              action="{{ url_for('control.resume' if paused else 'control.pause', instance=selected_instance.id) }}"
               style="display:none; margin-top:8px;">
           <input type="password" name="password" placeholder="control password" autocomplete="off">
           <button type="submit">{{ 'Resume' if paused else 'Pause' }}</button>
@@ -192,7 +192,7 @@
         <tbody>
         {% for v in v2_sessions %}
           <tr>
-            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a></td>
+            <td><a href="{{ url_for('html.session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a></td>
             <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
             <td style="text-align:right;" class="num">{{ v.num_ticks or 0 }}</td>
             <td>{{ v.elapsed_seconds|human_seconds }}</td>
@@ -278,7 +278,7 @@
         <tbody>
         {% for v in v3_sessions %}
           <tr>
-            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
+            <td><a href="{{ url_for('html.session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
             <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
             <td>
               {{ v.actual_awake_seconds|human_seconds }}
@@ -424,7 +424,7 @@
         <tbody>
         {% for v in v4_sessions %}
           <tr>
-            <td><a href="{{ url_for('session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
+            <td><a href="{{ url_for('html.session_detail', session_id=v.session_id, instance=selected_instance.id if selected_instance else None) }}">#{{ v.session_id }}</a>{% if v.live %} <span class="pill ok">live</span>{% endif %}</td>
             <td class="ts">{{ v.started_at|fmt_dt if v.started_at else '—' }}</td>
             <td>
               {{ v.actual_awake_seconds|human_seconds }}
@@ -626,9 +626,9 @@
           </details>
         {% endif %}
         <div class="small" style="margin-top:8px;">
-          <a href="{{ url_for('session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a>
+          <a href="{{ url_for('html.session_detail', session_id=note.session_id) }}{{ iq }}">full note &amp; per-seat reviews →</a>
           &nbsp;·&nbsp;
-          <a href="{{ url_for('research_view') }}{{ iq }}">all research ({{ research_notes_count }}) →</a>
+          <a href="{{ url_for('html.research_view') }}{{ iq }}">all research ({{ research_notes_count }}) →</a>
           <span class="ts">· synthesized {{ note.created_at|relative_time }}</span>
         </div>
       {% endif %}
