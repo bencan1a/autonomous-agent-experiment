@@ -1078,14 +1078,11 @@ def cmd_research_operationalize(args: argparse.Namespace) -> int:
     except FileNotFoundError as exc:
         return _err(str(exc))
     # Shell may export ANTHROPIC_API_KEY=""; force it from .env (as the runners do).
-    try:
-        from dotenv import load_dotenv as _ld
-        _ld(AGENT_ROOT / ".env", override=True)
-    except Exception:
-        pass
-    import os as _os
+    # research.clients owns that override=True gotcha in one place; lazy-imported
+    # here so unrelated subcommands never pull in anthropic.
+    from research.clients import anthropic_client, load_env
+    load_env(override=True)
 
-    import anthropic
     from research import prereg as prereg_mod
     from research.providers import get_provider
     from research.seats import seats_from_config
@@ -1114,7 +1111,7 @@ def cmd_research_operationalize(args: argparse.Namespace) -> int:
         return _err("no research seats configured for this instance.")
     max_tokens = int(research_cfg.get("max_tokens", 2048))
 
-    client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic_client()
     provider = get_provider(seats[0].provider, anthropic_client=client)
 
     costs = {"usd": 0.0}
@@ -1153,35 +1150,19 @@ def cmd_research_synthesize(args: argparse.Namespace) -> int:
     registry = load_registry()
     if registry_entry(registry, args.id) is None:
         return _err(f"no such instance: {args.id}")
-    try:
-        inst = load_instance(args.id)
-    except FileNotFoundError as exc:
-        return _err(str(exc))
-    # Shell may export ANTHROPIC_API_KEY=""; force it from .env (as the runners do).
-    try:
-        from dotenv import load_dotenv as _ld
-        _ld(AGENT_ROOT / ".env", override=True)
-    except Exception:
-        pass
-    import os as _os
-
-    import anthropic
-    from memory.episodic import EpisodicStore
-    from research.store import ResearchStore
+    # Shared bootstrap (dotenv override + Anthropic client + stores) — same path
+    # scripts/run_cumulative_synthesis.py uses. Lazy-imported so unrelated
+    # subcommands never pull in anthropic / the embedding model.
+    from research.clients import research_clients
     from research.synthesis import run_cumulative_synthesis
 
-    client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
-    ep = EpisodicStore(inst.episodes_db)
-    rs = ResearchStore(inst.episodes_db)
-    semantic = None
-    if not args.no_embed:
-        from memory.semantic import SemanticStore
-        semantic = SemanticStore(inst.vectors_dir)
+    try:
+        rc = research_clients(args.id, embed=not args.no_embed)
+    except FileNotFoundError as exc:
+        return _err(str(exc))
+    inst = rc.instance
     print(f"Refreshing cumulative synthesis for '{inst.id}' (real API spend)...")
-    res = run_cumulative_synthesis(
-        instance=inst, episodic=ep, research_store=rs,
-        anthropic_client=client, agent_root=AGENT_ROOT, semantic=semantic,
-    )
+    res = run_cumulative_synthesis(**rc.as_panel_kwargs())
     if not res:
         print("  no report produced (no spec / no coding scheme / disabled).")
         return 0

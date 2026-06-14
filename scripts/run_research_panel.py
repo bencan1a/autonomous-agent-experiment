@@ -19,26 +19,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 AGENT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(AGENT_ROOT))
 
-from dotenv import load_dotenv  # noqa: E402
-
-# Shell sets ANTHROPIC_API_KEY="" in this env; override from .env (as orchestrator does).
-load_dotenv(AGENT_ROOT / ".env", override=True)
-
-import anthropic  # noqa: E402
-
-from instances_common import SHARED_HF_CACHE, load_instance  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402
+from research.clients import research_clients  # noqa: E402
 from research.panel import run_research_panel  # noqa: E402
-from research.store import ResearchStore  # noqa: E402
-
-os.environ.setdefault("HF_HOME", str(SHARED_HF_CACHE))
 
 
 def _sessions_for_invocations(ep: EpisodicStore, invocations: list[int]) -> list[tuple[int, int]]:
@@ -69,29 +58,31 @@ def main(argv: list[str] | None = None) -> int:
                    help="skip refreshing the cumulative synthesis report at the end")
     args = p.parse_args(argv)
 
-    try:
-        inst = load_instance(args.instance_id)
-    except Exception as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
-
-    ep = EpisodicStore(inst.episodes_db)
-    rs = ResearchStore(inst.episodes_db)
-
     if args.first is not None:
         invocations = list(range(1, args.first + 1))
     else:
         invocations = args.invocations
+
+    # Resolve the instance + episodic store cheaply first so an empty target set
+    # exits before triggering the (slow) embedding-model load.
+    try:
+        from research.clients import load_env  # noqa: E402
+        load_env(override=True)
+        from instances_common import load_instance  # noqa: E402
+        inst = load_instance(args.instance_id)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    ep = EpisodicStore(inst.episodes_db)
+
     targets = _sessions_for_invocations(ep, invocations)
     if not targets:
         print("nothing to do.")
         return 0
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    semantic = None
-    if not args.no_embed:
-        from memory.semantic import SemanticStore
-        semantic = SemanticStore(inst.vectors_dir)
+    rc = research_clients(args.instance_id, embed=not args.no_embed)
+    inst, ep, rs = rc.instance, rc.episodic, rc.research
+    client, semantic = rc.anthropic, rc.semantic
 
     print(f"Running research panel for '{inst.id}' over invocations "
           f"{[inv for inv, _ in targets]} (real API spend)...\n")
@@ -101,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         res = run_research_panel(
             instance=inst, episodic=ep, research_store=rs,
             anthropic_client=client, session_id=sid, invocation_num=inv,
-            agent_root=AGENT_ROOT, semantic=semantic, also_cumulative=False,
+            agent_root=rc.agent_root, semantic=semantic, also_cumulative=False,
         )
         if res is None:
             print(f"  inv #{inv} (session#{sid}): panel returned None "
@@ -121,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         from research.synthesis import run_cumulative_synthesis
         sres = run_cumulative_synthesis(
             instance=inst, episodic=ep, research_store=rs,
-            anthropic_client=client, agent_root=AGENT_ROOT, semantic=semantic,
+            anthropic_client=client, agent_root=rc.agent_root, semantic=semantic,
         )
         if sres:
             print(f"  synthesis: {sres.get('status')} cost=${sres.get('cost_usd', 0):.4f}"
