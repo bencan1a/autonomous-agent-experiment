@@ -25,7 +25,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OR_MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -106,7 +106,7 @@ def or_chat_completion(
         resp = requests.post(_OR_URL, json=body, headers=headers, timeout=timeout)
         if resp.status_code in _HTTP_RETRY_STATUSES and attempt < _HTTP_MAX_ATTEMPTS - 1:
             delay = _retry_delay_s(resp, attempt)
-            log.warning(
+            logger.warning(
                 "OpenRouter HTTP %d; retrying in %.1fs (attempt %d/%d)",
                 resp.status_code, delay, attempt + 1, _HTTP_MAX_ATTEMPTS,
             )
@@ -151,7 +151,7 @@ def or_cost_or_estimate(
     from claude_client import estimate_cost
 
     est = estimate_cost(model, tokens_in, tokens_out)
-    log.warning(
+    logger.warning(
         "OpenRouter reported no usage.cost for %s; estimating $%.4f "
         "(Opus-tier fallback — conservative, may over-estimate)", model, est,
     )
@@ -413,7 +413,7 @@ class _Messages:
             # Retry on empty content (some models occasionally return blank)
             if parsed.content or parsed.stop_reason != "end_turn":
                 return parsed
-            log.warning(
+            logger.warning(
                 "OpenRouter returned empty content for %s (attempt %d/%d)",
                 model, attempt + 1, _RETRIES,
             )
@@ -455,7 +455,7 @@ def make_session_client(model: str, *, anthropic_mod: Any = None) -> tuple[Any, 
 
     if is_openrouter_model(model):
         client: Any = OpenRouterClient(api_key=_env("OPENROUTER_API_KEY", required=True))
-        log.info("Using OpenRouter model: %s (caching disabled)", model)
+        logger.info("Using OpenRouter model: %s (caching disabled)", model)
         return client, False  # prompt caching is Anthropic-specific
     if anthropic_mod is None:
         import anthropic as anthropic_mod

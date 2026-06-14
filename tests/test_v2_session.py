@@ -40,7 +40,7 @@ for _k in (
 ):
     os.environ[_k] = "x"
 
-# The loop logs expected warnings (e.g. the slack=None path) via log.exception;
+# The loop logs expected warnings (e.g. the slack=None path) via logger.exception;
 # silence the orchestrator logger so test output stays clean.
 logging.getLogger("orchestrator.v2").setLevel(logging.CRITICAL)
 logging.getLogger("orchestrator.engine").setLevel(logging.CRITICAL)
