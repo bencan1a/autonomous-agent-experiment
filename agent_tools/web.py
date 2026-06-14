@@ -11,9 +11,24 @@ from urllib.parse import urlparse, urljoin
 import requests
 
 
+def _as_int(value: Any, default: int, lo: int, hi: int) -> int:
+    """Coerce a model-supplied numeric arg to an int clamped to [lo, hi].
+
+    Shared by the tool layer to harden numeric inputs (web_search count,
+    memory query k / recent n) the way fetch_url already coerces max_chars.
+    Non-numeric / out-of-range values fall back to ``default`` (then clamp).
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
 def web_search(query: str, count: int = 5, *, ctx: Any) -> dict[str, Any]:
     if ctx.brave is None:
         return {"error": "web search unavailable"}
+    count = _as_int(count, default=5, lo=1, hi=20)  # mirror Brave's [1,20] clamp
     results = ctx.brave.search(query, count=count)
     return {
         "results": [
