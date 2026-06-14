@@ -31,6 +31,12 @@ _OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OR_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _RETRIES = 3
 
+# Transient-HTTP retry (429 rate-limit + 5xx) for the shared transport.
+_HTTP_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_HTTP_MAX_ATTEMPTS = 3
+_BACKOFF_BASE_S = 1.0
+_RETRY_CAP_S = 30.0  # cap any single backoff/Retry-After so a hostile header can't stall a session
+
 
 def is_openrouter_model(model: str) -> bool:
     """True when model looks like a vendor/name slug (not a native Claude model)."""
@@ -64,15 +70,30 @@ def list_openrouter_model_ids(*, api_key: str | None = None, timeout: float = 15
 # then call these helpers for the shared transport + parse.
 
 
+def _retry_delay_s(resp: Any, attempt: int) -> float:
+    """Backoff for a retryable response: honor ``Retry-After`` if present (capped),
+    else exponential backoff. Both bounded by ``_RETRY_CAP_S``."""
+    ra = resp.headers.get("Retry-After") if getattr(resp, "headers", None) else None
+    if ra:
+        try:
+            return min(float(ra), _RETRY_CAP_S)
+        except ValueError:
+            pass
+    return min(_BACKOFF_BASE_S * (2 ** attempt), _RETRY_CAP_S)
+
+
 def or_chat_completion(
     body: dict[str, Any], *, api_key: str, x_title: str, timeout: float = 180.0
 ) -> dict[str, Any]:
     """POST one OpenRouter chat-completion request and return the parsed JSON.
 
     Injects ``usage: {"include": True}`` (so OpenRouter reports actual spend),
-    sends the standard auth + ``X-Title`` headers, raises on HTTP error, and
-    returns ``resp.json()``. Callers own the body and any retry loop.
+    sends the standard auth + ``X-Title`` headers, retries on transient HTTP
+    errors (429 + 5xx) with bounded backoff, raises on other HTTP errors, and
+    returns ``resp.json()``. Callers own the body and any content-level retry loop.
     """
+    import time
+
     import requests  # already in requirements.txt
 
     body = dict(body)
@@ -81,9 +102,20 @@ def or_chat_completion(
         "Authorization": f"Bearer {api_key}",
         "X-Title": x_title,
     }
-    resp = requests.post(_OR_URL, json=body, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(_HTTP_MAX_ATTEMPTS):
+        resp = requests.post(_OR_URL, json=body, headers=headers, timeout=timeout)
+        if resp.status_code in _HTTP_RETRY_STATUSES and attempt < _HTTP_MAX_ATTEMPTS - 1:
+            delay = _retry_delay_s(resp, attempt)
+            log.warning(
+                "OpenRouter HTTP %d; retrying in %.1fs (attempt %d/%d)",
+                resp.status_code, delay, attempt + 1, _HTTP_MAX_ATTEMPTS,
+            )
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    # Unreachable: the final attempt always returns or raises above.
+    raise RuntimeError("or_chat_completion: retry loop exhausted without returning")
 
 
 def parse_or_usage(usage_raw: dict[str, Any] | None) -> tuple[int, int, float | None]:
@@ -99,6 +131,31 @@ def parse_or_usage(usage_raw: dict[str, Any] | None) -> tuple[int, int, float | 
         int(usage_raw.get("completion_tokens") or 0),
         float(cost_raw) if cost_raw is not None else None,
     )
+
+
+def or_cost_or_estimate(
+    model: str, tokens_in: int, tokens_out: int, reported_cost: float | None
+) -> float:
+    """Resolve an OpenRouter call's cost: the provider's reported spend if present,
+    else an estimate — with a warning, because the estimate is a guess.
+
+    When OpenRouter doesn't report ``usage.cost``, we fall back to
+    ``estimate_cost``, which prices unknown (non-Anthropic) models at the
+    Anthropic Opus-tier table. That is a DELIBERATE conservative default: it
+    over-estimates cheap models, so the budget guard trips early rather than
+    overspending. The warning makes the (rare) estimated row visible to the
+    operator so it isn't mistaken for an actual charge.
+    """
+    if reported_cost is not None:
+        return float(reported_cost)
+    from claude_client import estimate_cost
+
+    est = estimate_cost(model, tokens_in, tokens_out)
+    log.warning(
+        "OpenRouter reported no usage.cost for %s; estimating $%.4f "
+        "(Opus-tier fallback — conservative, may over-estimate)", model, est,
+    )
+    return est
 
 
 # --------------------------------------------------------------------------- #

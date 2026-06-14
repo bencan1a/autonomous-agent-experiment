@@ -23,6 +23,8 @@ class ToolContext:
     session_id: int
     invocation_num: int
     agent_root: Path
+    model: str | None = None     # session model; spawn_subagent defaults to it (single model per session)
+    client: Any = None           # session loop client (OpenRouter adapter or Anthropic SDK); falls back to `anthropic`
     workspace_dir: Path | None = None  # per-instance sandbox; falls back to agent_root/agent_workspace
     finish_state: dict | None = None       # v1: set by finish_session
     tick_state: dict | None = None         # v2: set by end_tick
@@ -151,7 +153,7 @@ TOOLS_SPEC: list[dict[str, Any]] = [
             "properties": {
                 "prompt": {"type": "string", "description": "User message to the sub-agent."},
                 "system_prompt": {"type": "string", "description": "Optional system prompt."},
-                "model": {"type": "string", "description": "Anthropic model id. Default 'claude-sonnet-4-6'."},
+                "model": {"type": "string", "description": "Model id. Defaults to the session model (recommended — keeps one model per session)."},
                 "max_tokens": {"type": "integer", "description": "Max output tokens. Default 2048."},
             },
             "required": ["prompt"],

@@ -610,6 +610,8 @@ def run_v1_session(instance: Instance) -> int:
         invocation_num=invocation_num,
         agent_root=AGENT_ROOT,
         workspace_dir=instance.workspace_dir,
+        model=model,
+        client=anthropic_client,  # v1 is Anthropic-only; loop client IS the SDK
     )
 
     try:

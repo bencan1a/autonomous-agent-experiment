@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from claude_client import estimate_cost
-from openrouter_client import or_chat_completion, parse_or_usage
+from openrouter_client import or_chat_completion, or_cost_or_estimate, parse_or_usage
 
 
 @dataclass
@@ -107,7 +107,8 @@ class OpenRouterProvider:
             body["response_format"] = {"type": "json_object"}
         # Retry on transient EMPTY completions: reasoning models (e.g. Gemini)
         # occasionally return no content via OpenRouter; the identical request
-        # succeeds on retry. Cost accrues per attempt. The shared transport adds
+        # succeeds on retry. You pay for every attempt, so BOTH tokens and cost
+        # accumulate across attempts (kept consistent). The shared transport adds
         # ``usage: {"include": True}`` so OpenRouter reports actual spend.
         text, tokens_in, tokens_out, cost = "", 0, 0, 0.0
         for _attempt in range(3):
@@ -117,8 +118,10 @@ class OpenRouterProvider:
             )
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             text = msg.get("content") or ""
-            tokens_in, tokens_out, c = parse_or_usage(data.get("usage"))
-            cost += c if c is not None else estimate_cost(model, tokens_in, tokens_out)
+            ti, to, c = parse_or_usage(data.get("usage"))
+            tokens_in += ti
+            tokens_out += to
+            cost += or_cost_or_estimate(model, ti, to, c)
             if text.strip():
                 break
         return LLMResponse(

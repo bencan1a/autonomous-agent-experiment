@@ -323,6 +323,7 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
         episodic=episodic, semantic=semantic, slack=slack, brave=brave,
         anthropic=anthropic_client, session_id=session_id, invocation_num=invocation_num,
         agent_root=instance.root.parent.parent, workspace_dir=instance.workspace_dir,
+        model=model, client=client,
     )
 
     return SessionRuntime(
