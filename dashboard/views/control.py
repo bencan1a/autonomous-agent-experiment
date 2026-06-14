@@ -5,9 +5,9 @@ g.instance. Route bodies moved verbatim from dashboard/app.py (P1-3); the only
 mechanical edits are @app.route -> @bp.route, url_for("index") ->
 url_for("html.index"), and app.logger -> current_app.logger.
 
-_control_authorized stays in dashboard.app (it is part of the request
-lifecycle); it is imported lazily inside the route bodies so this module never
-imports the Flask app at module level (no import cycle, run-as-script safe).
+The fail-closed check `_control_authorized` lives in dashboard.data (a pure
+os/hmac helper), so this module imports it at module level without ever importing
+the Flask app (no import cycle, run-as-script safe).
 """
 
 from __future__ import annotations
@@ -19,15 +19,13 @@ from flask import Blueprint, abort, current_app, g, redirect, request, url_for
 import instance_control
 from instance_manager import create_cloned_instance
 
-from dashboard.data import UTC, _parse_iso
+from dashboard.data import UTC, _control_authorized, _parse_iso
 
 bp = Blueprint("control", __name__)
 
 
 @bp.route("/control/pause", methods=["POST"])
 def pause():
-    from dashboard.app import _control_authorized
-
     if getattr(g, "instance", None) is None:
         abort(404)
     iid = g.instance.id
@@ -41,8 +39,6 @@ def pause():
 
 @bp.route("/control/resume", methods=["POST"])
 def resume():
-    from dashboard.app import _control_authorized
-
     if getattr(g, "instance", None) is None:
         abort(404)
     iid = g.instance.id
@@ -83,8 +79,6 @@ def create_instance():
     """Clone the current instance's config onto a different model as a new,
     fresh-start (paused) instance. Same control password as pause/resume; the
     clone is transactional (full rollback + visible error on any failure)."""
-    from dashboard.app import _control_authorized
-
     if getattr(g, "instance", None) is None:
         abort(404)
     parent = g.instance

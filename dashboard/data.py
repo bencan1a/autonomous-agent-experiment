@@ -10,6 +10,7 @@ dashboard.app or dashboard.views (no import cycles).
 from __future__ import annotations
 
 import difflib
+import hmac
 import json
 import os
 import re
@@ -32,6 +33,20 @@ from instances_common import (
 ROOT = Path(__file__).resolve().parent.parent
 
 UTC = timezone.utc
+
+
+def _control_authorized(provided: str | None) -> bool:
+    """Fail-closed password check for the state-mutating control routes.
+
+    Returns False if the secret is unset OR no password was provided. The secret
+    is read from DASHBOARD_CONTROL_PASSWORD (set by the human in .env). Never
+    logged or echoed. Lives here (not app.py) so the control blueprint can import
+    it at module level without importing the Flask app.
+    """
+    secret = os.environ.get("DASHBOARD_CONTROL_PASSWORD", "")
+    if not secret or not provided:
+        return False
+    return hmac.compare_digest(provided, secret)
 
 # Cap inline-rendered file size to keep the dashboard responsive; bigger files
 # get a "view raw" link instead.

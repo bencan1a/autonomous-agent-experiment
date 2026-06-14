@@ -9,7 +9,6 @@ blueprints under dashboard/views/ (html, control, api). See P1-3 in CODE_REVIEW.
 
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import sys
@@ -52,19 +51,6 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 # take effect on the next request without restarting the long-lived process. Cheap
 # (an mtime stat per render); independent of debug mode, which stays off in prod.
 app.config["TEMPLATES_AUTO_RELOAD"] = True
-
-
-def _control_authorized(provided: str | None) -> bool:
-    """Fail-closed password check for the state-mutating control routes.
-
-    Returns False if the secret is unset OR no password was provided. The secret
-    is read from DASHBOARD_CONTROL_PASSWORD (set by the human in .env). Never
-    logged or echoed.
-    """
-    secret = os.environ.get("DASHBOARD_CONTROL_PASSWORD", "")
-    if not secret or not provided:
-        return False
-    return hmac.compare_digest(provided, secret)
 
 
 def _resolve_instance():
