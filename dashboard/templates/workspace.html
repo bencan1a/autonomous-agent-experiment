@@ -1,9 +1,5 @@
 {% extends "_base.html" %}
 
-{% block header_meta %}
-  &nbsp; {{ total_files }} file{{ '' if total_files==1 else 's' }} · {{ total_bytes|fmt_bytes }}
-{% endblock %}
-
 {% block main %}
   <section class="wide">
     <h2>Workspace files</h2>

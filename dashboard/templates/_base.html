@@ -160,6 +160,9 @@
   .pill.bad { color: var(--bad); border-color: var(--bad); }
   .pill.muted { color: var(--muted); }
   .pill.dim { color: var(--ok); opacity: 0.6; border-color: var(--ok); }
+  /* Bordered content card (research-note listings, etc.). Per-site margins stay
+     inline; this owns only the border/padding/radius the copies all shared. */
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
   .num { color: var(--accent); font-weight: 600; }
   pre {
     background: #0a0d12;

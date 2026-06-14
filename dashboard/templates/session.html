@@ -1,13 +1,12 @@
 {% extends "_base.html" %}
+{% import "_macros.html" as ui %}
 
 {% block title %}Session #{{ session.id }} — dashboard{% endblock %}
 
 {% block head_extra %}
-  {% if is_live %}<meta http-equiv="refresh" content="20">{% endif %}
-{% endblock %}
-
-{% block header_meta %}
-  &nbsp; session #{{ session.id }}
+  {# Pausable JS auto-refresh while live (shared controller in _base.html) —
+     replaces a raw <meta refresh> that wiped open <details>/scroll mid-read. #}
+  {% if is_live %}<script>window.AUTO_REFRESH_SECONDS = 20;</script>{% endif %}
 {% endblock %}
 
 {% block main %}
@@ -102,12 +101,7 @@
   {% if research_note or research_seats %}
     <section class="wide">
       <h2>Research panel
-        {% if research_note and research_note.coding_status == 'binding' %}
-          <span class="pill ok">binding</span>
-        {% else %}
-          <span class="pill muted" title="The coding scheme is not yet operator-approved.">provisional</span>
-        {% endif %}
-        {% if research_note and research_note.degraded %}<span class="pill bad">degraded</span>{% endif %}
+        {% if research_note %}{{ ui.status_pill(research_note, with_title=true) }}{% endif %}
       </h2>
 
       {% if research_kappa %}
