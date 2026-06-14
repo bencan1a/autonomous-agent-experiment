@@ -6,8 +6,6 @@ Anthropic client and semantic store are scripted fakes.
 
 Run:
     ./venv/bin/python tests/test_research_panel.py
-    (or, if pytest is available)
-    ./venv/bin/python -m pytest tests/test_research_panel.py -q
 """
 
 from __future__ import annotations

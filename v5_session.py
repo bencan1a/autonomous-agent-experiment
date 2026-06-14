@@ -70,7 +70,7 @@ from session_common import (
     tools_with_cache_control,
 )
 
-log = logging.getLogger("orchestrator.v5")
+logger = logging.getLogger("orchestrator.v5")
 
 UTC = timezone.utc
 
@@ -247,7 +247,7 @@ def run_v5_session(instance: Instance) -> int:
     IDLE_BASE = float(cfg.get("cadence_idle_base_seconds", 60))
     IDLE_CEIL = float(cfg.get("cadence_idle_ceil_seconds", 300))
     BACKOFF = float(cfg.get("cadence_backoff", 2.0))
-    log.info("v5 session %d awake window %.1f min", rt.session_id, awake_min)
+    logger.info("v5 session %d awake window %.1f min", rt.session_id, awake_min)
 
     # inbound chat tracking continues from the initial fetch in setup_session.
     last_seen = rt.last_seen
@@ -285,7 +285,7 @@ def run_v5_session(instance: Instance) -> int:
         elapsed = time.monotonic() - rt.t_start
         if elapsed >= rt.max_wall:
             end_reason = "wall_clock_cap"
-            log.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
+            logger.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
             break
         if num_turns >= MAX_TURNS_PER_SESSION:
             end_reason = "max_turns"
@@ -310,7 +310,7 @@ def run_v5_session(instance: Instance) -> int:
                 ctx=rt.ctx, episodic=rt.episodic, session_id=rt.session_id,
             )
         except Exception as exc:  # noqa: BLE001 — model/API error must not zombie the session
-            log.exception("Fatal error during turn %d; ending session", num_turns + 1)
+            logger.exception("Fatal error during turn %d; ending session", num_turns + 1)
             fatal_error = f"{type(exc).__name__}: {exc}"
             end_reason = "session_error"
             break
@@ -335,12 +335,12 @@ def run_v5_session(instance: Instance) -> int:
         if hit:
             distress_alerts += 1
             alert = f"[distress monitor] turn {num_turns} — possible distress:\n{excerpt}"
-            log.warning("v5 distress tripwire: %s", alert)
+            logger.warning("v5 distress tripwire: %s", alert)
             if rt.slack:
                 try:
                     rt.slack.dm_ben(alert)
                 except Exception:
-                    log.exception("failed to post distress alert")
+                    logger.exception("failed to post distress alert")
 
         # WIND-DOWN: the only normal way the loop ends.
         if announced:
@@ -353,7 +353,7 @@ def run_v5_session(instance: Instance) -> int:
             try:
                 new_inbound = rt.slack.fetch_dms_from_ben(oldest_ts=last_seen)
             except Exception:
-                log.exception("inbound chat poll failed")
+                logger.exception("inbound chat poll failed")
                 new_inbound = []
         if new_inbound:
             for m in new_inbound:
@@ -376,7 +376,7 @@ def run_v5_session(instance: Instance) -> int:
             gap = idle_gap
             idle_gap = min(idle_gap * BACKOFF, IDLE_CEIL)
 
-        log.info("turn %d: note=%r substantive=%s tools=%d cost=$%.4f cache_r=%d "
+        logger.info("turn %d: note=%r substantive=%s tools=%d cost=$%.4f cache_r=%d "
                  "elapsed=%.0fs/%.0fs gap=%.0fs",
                  num_turns, ts.get("tick_focus"), substantive, turn.tool_calls,
                  turn.cost_usd, turn.cache_read, elapsed, wind_down_seconds, gap)
@@ -411,7 +411,7 @@ def run_v5_session(instance: Instance) -> int:
             consolidated_count=consolidated_count, distress_alerts=distress_alerts,
         )
     except Exception:
-        log.exception("Failed to write v5 session record")
+        logger.exception("Failed to write v5 session record")
 
     if rt.inbound_dms:
         try:
@@ -426,10 +426,10 @@ def run_v5_session(instance: Instance) -> int:
 
     if fatal_error:
         fatal_pause(rt, fatal_error)
-        log.error("v5 session %d ended on fatal error: %s", rt.session_id, fatal_error)
+        logger.error("v5 session %d ended on fatal error: %s", rt.session_id, fatal_error)
         return 0
 
-    log.info(
+    logger.info(
         "v5 session %d ended: reason=%s turns=%d (active=%d idle=%d) awake=%.1fm "
         "(planned %.1fm) inbound=%d cost=$%.4f cache_read=%d consolidated=%d "
         "decayed=%d distress_alerts=%d next_wake=%.1fm",
