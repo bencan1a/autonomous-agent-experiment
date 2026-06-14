@@ -13,13 +13,28 @@ Track the **model** per instance explicitly — it's an independent variable. If
 swap providers (e.g. a local Ollama model, DeepSeek, a different Claude tier), the
 model field is how we keep comparisons honest.
 
+## Shared per-version base docs (`_vN-base.md`)
+
+When several instances share one experimental *version* (e.g. the v4 instances
+`v4-continuous` / `-8a` / `-qwen-max`, or the v5 instances), the common design rationale
+lives once in a `_vN-base.md` file (`_v4-base.md`, `_v5-base.md`). Each per-instance
+`<instance_id>.md` then carries only `{id, model, status, dates, instance-specific notes}`,
+a pointer to its base, and its **own** `## Specification (formal)` ```yaml block. The
+underscore prefix marks these as design bases, not instance docs — `research/spec.py` only
+ever loads `experiments/<instance_id>.md`, so a `_vN-base.md` is never parsed as a spec.
+
+**Never edit an instance's ```yaml spec block to dedupe prose.** That block is parsed by
+`research/spec.py` and its sha256 hash gates the research-panel coding scheme — changing it
+reverts the panel to `pending_approval`. Dedupe the *prose around* the block; leave the
+block byte-for-byte intact.
+
 ## Template
 
 ```markdown
 # <instance_id>
 
-- **Version:** v1 | v2
-- **Model:** <model id>  (provider: anthropic | ollama | deepseek | …)
+- **Version:** v1 | v2 | v3 | v4 | v5
+- **Model:** <model id>  (provider: anthropic | openrouter | ollama | deepseek | …)
 - **Status:** active | paused | archived
 - **Created / Activated:** <date>
 - **Operator:** <who>
