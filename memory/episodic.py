@@ -14,11 +14,11 @@ Tables:
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from memory.sqlite_base import _conn as _open_conn, run_idempotent_alters
 
 UTC = timezone.utc
 
@@ -231,25 +231,13 @@ class EpisodicStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+        return _open_conn(self.db_path)
 
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
-            for stmt in _EPISODE_ALTERS:
-                try:
-                    conn.execute(stmt)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column" not in str(e).lower():
-                        raise
+            run_idempotent_alters(conn, _EPISODE_ALTERS)
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = 'start_date'"
             ).fetchone()
@@ -426,26 +414,14 @@ class EpisodicStore:
     ) -> None:
         """Mark a capability request resolved (e.g. 'granted'/'denied').
 
-        Updates the row's status, and ben_response if that column exists (it
-        does in the current schema). Does nothing observable beyond the UPDATE.
+        Updates the row's status and ben_response. Does nothing observable
+        beyond the UPDATE.
         """
         with self._conn() as conn:
-            cols = {
-                r[1]
-                for r in conn.execute(
-                    "PRAGMA table_info(capability_requests)"
-                ).fetchall()
-            }
-            if "ben_response" in cols:
-                conn.execute(
-                    "UPDATE capability_requests SET status = ?, ben_response = ? WHERE id = ?",
-                    (status, ben_response, request_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE capability_requests SET status = ? WHERE id = ?",
-                    (status, request_id),
-                )
+            conn.execute(
+                "UPDATE capability_requests SET status = ?, ben_response = ? WHERE id = ?",
+                (status, ben_response, request_id),
+            )
 
     # ---------- cost tracking ----------
 
@@ -854,6 +830,49 @@ class EpisodicStore:
                 r["actions_taken"] = []
         return list(reversed(out))  # chronological
 
+    # ---------- per-version session records (v2/v3/v4) ----------
+    #
+    # The three log_v{2,3,4}_session writers and their recent_v{N}_sessions
+    # readers were structurally identical: an upsert keyed on session_id whose
+    # column list was spelled out twice (VALUES + excluded.*), plus a LIMIT
+    # reader differing only by table name. _upsert_session_record and
+    # _recent_session_rows derive that SQL from the field set so each new
+    # version is a thin typed wrapper, not another doubled column list.
+    #
+    # started_at is insert-only (set on first write, preserved on conflict) to
+    # match the original statements, which excluded it from the update clause.
+
+    def _upsert_session_record(
+        self, table: str, *, session_id: int, **fields: Any
+    ) -> None:
+        """Upsert one row keyed on session_id. Columns derive from fields in
+        order; session_id is the PK and started_at (if present) is insert-only,
+        so neither appears in the ON CONFLICT update clause — reproducing the
+        original hand-written statements exactly.
+
+        ``table`` is a code-internal constant (never user input), so f-string
+        interpolation of the table name is safe here."""
+        cols = ["session_id", *fields.keys()]
+        placeholders = ", ".join("?" * len(cols))
+        update_cols = [
+            c for c in cols if c not in ("session_id", "started_at")
+        ]
+        update_clause = ", ".join(f"{c} = excluded.{c}" for c in update_cols)
+        sql = (
+            f"INSERT INTO {table}({', '.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT(session_id) DO UPDATE SET {update_clause}"
+        )
+        values = [session_id, *fields.values()]
+        with self._conn() as conn:
+            conn.execute(sql, values)
+
+    def _recent_session_rows(self, table: str, n: int) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM {table} ORDER BY session_id DESC LIMIT ?", (n,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def log_v2_session(
         self,
         *,
@@ -869,38 +888,23 @@ class EpisodicStore:
         decayed_count: int,
         consolidated_count: int,
     ) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO v2_sessions(
-                    session_id, started_at, ended_at, num_ticks, elapsed_seconds,
-                    min_wake_seconds, ended_early, end_reason, next_invoke_minutes,
-                    decayed_count, consolidated_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    ended_at = excluded.ended_at,
-                    num_ticks = excluded.num_ticks,
-                    elapsed_seconds = excluded.elapsed_seconds,
-                    min_wake_seconds = excluded.min_wake_seconds,
-                    ended_early = excluded.ended_early,
-                    end_reason = excluded.end_reason,
-                    next_invoke_minutes = excluded.next_invoke_minutes,
-                    decayed_count = excluded.decayed_count,
-                    consolidated_count = excluded.consolidated_count
-                """,
-                (
-                    session_id, started_at, ended_at, num_ticks, elapsed_seconds,
-                    min_wake_seconds, 1 if ended_early else 0, end_reason,
-                    next_invoke_minutes, decayed_count, consolidated_count,
-                ),
-            )
+        self._upsert_session_record(
+            "v2_sessions",
+            session_id=session_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            num_ticks=num_ticks,
+            elapsed_seconds=elapsed_seconds,
+            min_wake_seconds=min_wake_seconds,
+            ended_early=1 if ended_early else 0,
+            end_reason=end_reason,
+            next_invoke_minutes=next_invoke_minutes,
+            decayed_count=decayed_count,
+            consolidated_count=consolidated_count,
+        )
 
     def recent_v2_sessions(self, n: int = 20) -> list[dict[str, Any]]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM v2_sessions ORDER BY session_id DESC LIMIT ?", (n,)
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self._recent_session_rows("v2_sessions", n)
 
     # ---------- v3: circadian session record ----------
 
@@ -922,45 +926,26 @@ class EpisodicStore:
         consolidated_count: int,
         distress_alerts: int,
     ) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO v3_sessions(
-                    session_id, started_at, ended_at, wind_down_seconds,
-                    actual_awake_seconds, scheduled_sleep_minutes, num_ticks,
-                    would_end_now_count, first_would_end_now_tick, end_reason,
-                    total_cost_usd, decayed_count, consolidated_count,
-                    distress_alerts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    ended_at = excluded.ended_at,
-                    wind_down_seconds = excluded.wind_down_seconds,
-                    actual_awake_seconds = excluded.actual_awake_seconds,
-                    scheduled_sleep_minutes = excluded.scheduled_sleep_minutes,
-                    num_ticks = excluded.num_ticks,
-                    would_end_now_count = excluded.would_end_now_count,
-                    first_would_end_now_tick = excluded.first_would_end_now_tick,
-                    end_reason = excluded.end_reason,
-                    total_cost_usd = excluded.total_cost_usd,
-                    decayed_count = excluded.decayed_count,
-                    consolidated_count = excluded.consolidated_count,
-                    distress_alerts = excluded.distress_alerts
-                """,
-                (
-                    session_id, started_at, ended_at, wind_down_seconds,
-                    actual_awake_seconds, scheduled_sleep_minutes, num_ticks,
-                    would_end_now_count, first_would_end_now_tick, end_reason,
-                    total_cost_usd, decayed_count, consolidated_count,
-                    distress_alerts,
-                ),
-            )
+        self._upsert_session_record(
+            "v3_sessions",
+            session_id=session_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            wind_down_seconds=wind_down_seconds,
+            actual_awake_seconds=actual_awake_seconds,
+            scheduled_sleep_minutes=scheduled_sleep_minutes,
+            num_ticks=num_ticks,
+            would_end_now_count=would_end_now_count,
+            first_would_end_now_tick=first_would_end_now_tick,
+            end_reason=end_reason,
+            total_cost_usd=total_cost_usd,
+            decayed_count=decayed_count,
+            consolidated_count=consolidated_count,
+            distress_alerts=distress_alerts,
+        )
 
     def recent_v3_sessions(self, n: int = 20) -> list[dict[str, Any]]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM v3_sessions ORDER BY session_id DESC LIMIT ?", (n,)
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self._recent_session_rows("v3_sessions", n)
 
     # ---------- v4: continuous session record ----------
 
@@ -983,46 +968,27 @@ class EpisodicStore:
         consolidated_count: int,
         distress_alerts: int,
     ) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO v4_sessions(
-                    session_id, started_at, ended_at, awake_seconds_target,
-                    actual_awake_seconds, scheduled_sleep_minutes, num_turns,
-                    active_turns, idle_turns, inbound_messages, end_reason,
-                    total_cost_usd, decayed_count, consolidated_count,
-                    distress_alerts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    ended_at = excluded.ended_at,
-                    awake_seconds_target = excluded.awake_seconds_target,
-                    actual_awake_seconds = excluded.actual_awake_seconds,
-                    scheduled_sleep_minutes = excluded.scheduled_sleep_minutes,
-                    num_turns = excluded.num_turns,
-                    active_turns = excluded.active_turns,
-                    idle_turns = excluded.idle_turns,
-                    inbound_messages = excluded.inbound_messages,
-                    end_reason = excluded.end_reason,
-                    total_cost_usd = excluded.total_cost_usd,
-                    decayed_count = excluded.decayed_count,
-                    consolidated_count = excluded.consolidated_count,
-                    distress_alerts = excluded.distress_alerts
-                """,
-                (
-                    session_id, started_at, ended_at, awake_seconds_target,
-                    actual_awake_seconds, scheduled_sleep_minutes, num_turns,
-                    active_turns, idle_turns, inbound_messages, end_reason,
-                    total_cost_usd, decayed_count, consolidated_count,
-                    distress_alerts,
-                ),
-            )
+        self._upsert_session_record(
+            "v4_sessions",
+            session_id=session_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            awake_seconds_target=awake_seconds_target,
+            actual_awake_seconds=actual_awake_seconds,
+            scheduled_sleep_minutes=scheduled_sleep_minutes,
+            num_turns=num_turns,
+            active_turns=active_turns,
+            idle_turns=idle_turns,
+            inbound_messages=inbound_messages,
+            end_reason=end_reason,
+            total_cost_usd=total_cost_usd,
+            decayed_count=decayed_count,
+            consolidated_count=consolidated_count,
+            distress_alerts=distress_alerts,
+        )
 
     def recent_v4_sessions(self, n: int = 20) -> list[dict[str, Any]]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM v4_sessions ORDER BY session_id DESC LIMIT ?", (n,)
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self._recent_session_rows("v4_sessions", n)
 
 
 if __name__ == "__main__":
