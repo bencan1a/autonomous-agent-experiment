@@ -119,9 +119,11 @@ class RecordingCron:
     def clear_instance(self, instance_id):
         self.calls.append(("clear_instance", instance_id, {}))
 
-    def install_instance_one_shot(self, instance_id, minutes_from_now=None):
+    def install_instance_one_shot(self, instance_id, minutes_from_now=None,
+                                  min_minutes=None, command=None):
         self.calls.append(("install_instance_one_shot", instance_id,
-                           {"minutes_from_now": minutes_from_now}))
+                           {"minutes_from_now": minutes_from_now,
+                            "min_minutes": min_minutes}))
 
     def names(self):
         return [c[0] for c in self.calls]
