@@ -53,6 +53,55 @@ def list_openrouter_model_ids(*, api_key: str | None = None, timeout: float = 15
 
 
 # --------------------------------------------------------------------------- #
+# Shared OpenRouter HTTP transport
+# --------------------------------------------------------------------------- #
+# One place owns the endpoint URL, the auth/title headers, the
+# ``usage: {"include": True}`` body flag, and the usage->tokens/cost parse.
+# Both the session-loop client (``_Messages.create``) and the research-panel
+# provider (``research.providers.OpenRouterProvider.complete``) build their own
+# request body (they differ: tools/tool_choice vs response_format) and run their
+# own retry/cost loop (they differ in retry condition and cost accumulation),
+# then call these helpers for the shared transport + parse.
+
+
+def or_chat_completion(
+    body: dict[str, Any], *, api_key: str, x_title: str, timeout: float = 180.0
+) -> dict[str, Any]:
+    """POST one OpenRouter chat-completion request and return the parsed JSON.
+
+    Injects ``usage: {"include": True}`` (so OpenRouter reports actual spend),
+    sends the standard auth + ``X-Title`` headers, raises on HTTP error, and
+    returns ``resp.json()``. Callers own the body and any retry loop.
+    """
+    import requests  # already in requirements.txt
+
+    body = dict(body)
+    body["usage"] = {"include": True}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "X-Title": x_title,
+    }
+    resp = requests.post(_OR_URL, json=body, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def parse_or_usage(usage_raw: dict[str, Any] | None) -> tuple[int, int, float | None]:
+    """OpenRouter ``usage`` block -> ``(tokens_in, tokens_out, cost_or_none)``.
+
+    ``cost`` is OpenRouter's reported actual spend; ``None`` when absent so the
+    caller can decide on a fallback (e.g. an estimate).
+    """
+    usage_raw = usage_raw or {}
+    cost_raw = usage_raw.get("cost")
+    return (
+        int(usage_raw.get("prompt_tokens") or 0),
+        int(usage_raw.get("completion_tokens") or 0),
+        float(cost_raw) if cost_raw is not None else None,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Fake response objects — attributes match the Anthropic SDK's interface
 # --------------------------------------------------------------------------- #
 
@@ -251,15 +300,14 @@ def _parse_response(data: dict[str, Any]) -> ORResponse:
         "length": "max_tokens",
     }.get(finish_reason, "end_turn")
 
-    usage_raw = data.get("usage") or {}
-    cost_raw = usage_raw.get("cost")
+    tokens_in, tokens_out, cost = parse_or_usage(data.get("usage"))
     return ORResponse(
         content=blocks,
         stop_reason=stop_reason,
         usage=ORUsage(
-            input_tokens=int(usage_raw.get("prompt_tokens") or 0),
-            output_tokens=int(usage_raw.get("completion_tokens") or 0),
-            actual_cost_usd=float(cost_raw) if cost_raw is not None else None,
+            input_tokens=tokens_in,
+            output_tokens=tokens_out,
+            actual_cost_usd=cost,
         ),
     )
 
@@ -283,8 +331,6 @@ class _Messages:
         tools: list[dict[str, Any]] | None = None,
         **_kwargs,
     ) -> ORResponse:
-        import requests  # already in requirements.txt
-
         oai_messages: list[dict[str, Any]] = []
         if system:
             sys_text = _system_to_str(system).strip()
@@ -296,22 +342,16 @@ class _Messages:
             "model": model,
             "max_tokens": max_tokens,
             "messages": oai_messages,
-            "usage": {"include": True},
         }
         if tools:
             body["tools"] = _tools_to_openai(tools)
             body["tool_choice"] = "auto"
 
-        headers = {
-            "Authorization": f"Bearer {self._key}",
-            "X-Title": "agent-session",
-        }
-
         parsed = ORResponse(content=[])
         for attempt in range(_RETRIES):
-            resp = requests.post(_OR_URL, json=body, headers=headers, timeout=self._timeout)
-            resp.raise_for_status()
-            data = resp.json()
+            data = or_chat_completion(
+                body, api_key=self._key, x_title="agent-session", timeout=self._timeout,
+            )
             parsed = _parse_response(data)
             # Retry on empty content (some models occasionally return blank)
             if parsed.content or parsed.stop_reason != "end_turn":
@@ -332,3 +372,35 @@ class OpenRouterClient:
 
     def __init__(self, api_key: str, timeout: float = 180.0):
         self.messages = _Messages(api_key=api_key, timeout=timeout)
+
+
+# --------------------------------------------------------------------------- #
+# Loop-client selection (Anthropic SDK vs OpenRouter)
+# --------------------------------------------------------------------------- #
+
+def make_session_client(model: str, *, anthropic_mod: Any = None) -> tuple[Any, bool]:
+    """Resolve the session loop's model client + whether prompt caching applies.
+
+    OpenRouter models -> ``(OpenRouterClient, False)`` (prompt caching is an
+    Anthropic-specific feature). Native Claude models -> a raw
+    ``anthropic.Anthropic`` client with caching enabled. The DISTINCT Anthropic
+    path is deliberate: Anthropic models go through the official SDK, not the
+    OpenRouter adapter.
+
+    ``anthropic_mod`` lets the caller pass the (possibly monkeypatched) ``anthropic``
+    module reference it already imported, so the SDK client is built through the
+    same reference tests patch; defaults to a real ``import anthropic``.
+
+    Reads keys via ``session_common._env`` (the same source ``setup_session``
+    uses), so the shared ``.env`` is the single source of credentials.
+    """
+    from session_common import _env
+
+    if is_openrouter_model(model):
+        client: Any = OpenRouterClient(api_key=_env("OPENROUTER_API_KEY", required=True))
+        log.info("Using OpenRouter model: %s (caching disabled)", model)
+        return client, False  # prompt caching is Anthropic-specific
+    if anthropic_mod is None:
+        import anthropic as anthropic_mod
+
+    return anthropic_mod.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True)), True

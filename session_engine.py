@@ -43,7 +43,7 @@ from communications.slack_client import SlackClient, format_episode_for_observer
 from instances_common import Instance, SHARED_HF_CACHE, now_iso, registry_txn
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
-from openrouter_client import OpenRouterClient, is_openrouter_model
+from openrouter_client import make_session_client, is_openrouter_model
 from session_common import _env, _execute_side_effects
 from tools.web_search import BraveSearch
 
@@ -57,12 +57,20 @@ DEFAULT_COMPACTION_TOKENS = 120_000
 # decay (shared; episodes past decay_hours that were not consolidated are deleted)
 # --------------------------------------------------------------------------- #
 
-def run_decay(episodic: EpisodicStore, decay_hours: float) -> list[dict[str, Any]]:
+def run_decay(
+    episodic: EpisodicStore, decay_hours: float, semantic: SemanticStore | None = None,
+) -> list[dict[str, Any]]:
     """Delete un-consolidated episodes past the decay horizon. Returns what was
-    deleted (brief dicts) so the agent can be told, factually, what is now gone."""
+    deleted (brief dicts) so the agent can be told, factually, what is now gone.
+
+    When ``semantic`` is given, the same un-consolidated episodes' vectors are
+    deleted from the semantic store too, so decayed memory doesn't linger in
+    retrieval. Only the exact ids decay removes are targeted — consolidated /
+    authored memory is never touched. A vector-store hiccup never breaks decay."""
     stale = episodic.unconsolidated_older_than_hours(decay_hours)
     if not stale:
         return []
+    stale_ids = [e["id"] for e in stale]
     brief = [
         {
             "invocation_num": e.get("invocation_num"),
@@ -71,7 +79,12 @@ def run_decay(episodic: EpisodicStore, decay_hours: float) -> list[dict[str, Any
         }
         for e in stale
     ]
-    episodic.delete_episodes([e["id"] for e in stale])
+    episodic.delete_episodes(stale_ids)
+    if semantic is not None:
+        try:
+            semantic.delete_by_episode_ids(stale_ids)
+        except Exception:
+            log.exception("decay: failed to delete vectors for decayed episodes")
     log.info("decay: deleted %d un-consolidated episode(s) past %sh", len(stale), decay_hours)
     return brief
 
@@ -242,19 +255,22 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
     except Exception:
         log.exception("Brave init failed; web_search will error")
         brave = None
-    anthropic_client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
-
     # params (config over env defaults)
     model = instance.model
     max_tokens = int(cfg.get("max_tokens", 4096))
-    caching = bool(cfg.get("prompt_caching", True))
+
+    # Loop client + caching flag (Anthropic SDK for Claude models, OpenRouter
+    # adapter for slug models; caching is Anthropic-specific). The raw Anthropic
+    # SDK (anthropic_client) is ALSO needed for the research panel / ToolContext:
+    # for a Claude model the loop client already IS the SDK, so reuse it; for an
+    # OpenRouter model build the SDK separately. Pass our (test-patchable)
+    # ``anthropic`` module into the factory so monkeypatched tests flow through.
+    client, client_caching = make_session_client(model, anthropic_mod=anthropic)
+    caching = bool(cfg.get("prompt_caching", True)) and client_caching
     if is_openrouter_model(model):
-        or_key = _env("OPENROUTER_API_KEY", required=True)
-        client: Any = OpenRouterClient(api_key=or_key)
-        caching = False  # prompt caching is Anthropic-specific
-        log.info("Using OpenRouter model: %s (caching disabled)", model)
+        anthropic_client: Any = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
     else:
-        client = anthropic_client
+        anthropic_client = client  # already the Anthropic SDK
     compaction_on = bool(cfg.get("in_session_compaction", True))
     compaction_threshold = int(cfg.get("compaction_token_threshold", DEFAULT_COMPACTION_TOKENS))
     decay_hours = float(cfg.get("decay_hours", 72))
@@ -283,7 +299,7 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
         return None
 
     # Step 3 — decay.
-    decayed = run_decay(episodic, decay_hours)
+    decayed = run_decay(episodic, decay_hours, semantic)
 
     # Step 4 — session start.
     invocation_num = episodic.next_invocation_num()

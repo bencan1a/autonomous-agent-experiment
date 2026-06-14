@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from claude_client import estimate_cost
+from openrouter_client import or_chat_completion, parse_or_usage
 
 
 @dataclass
@@ -82,7 +83,6 @@ class OpenRouterProvider:
     """
 
     name = "openrouter"
-    _URL = "https://openrouter.ai/api/v1/chat/completions"
 
     def __init__(self, api_key: str, *, timeout: float = 180.0):
         self._key = api_key
@@ -91,16 +91,13 @@ class OpenRouterProvider:
     def complete(
         self, *, system: str, prompt: str, model: str, max_tokens: int
     ) -> LLMResponse:
-        import requests
-
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "usage": {"include": True},   # ask OpenRouter to report actual cost
         }
         # Force structured JSON output for models that emit invalid JSON on large
         # notes (e.g. Mistral, DeepSeek). EXCLUDE Gemini: its OpenRouter endpoint
@@ -108,25 +105,20 @@ class OpenRouterProvider:
         # reliable without it (given the token headroom).
         if not model.startswith("google/"):
             body["response_format"] = {"type": "json_object"}
-        headers = {
-            "Authorization": f"Bearer {self._key}",
-            "X-Title": "agent-research-panel",
-        }
         # Retry on transient EMPTY completions: reasoning models (e.g. Gemini)
         # occasionally return no content via OpenRouter; the identical request
-        # succeeds on retry. Cost accrues per attempt.
+        # succeeds on retry. Cost accrues per attempt. The shared transport adds
+        # ``usage: {"include": True}`` so OpenRouter reports actual spend.
         text, tokens_in, tokens_out, cost = "", 0, 0, 0.0
         for _attempt in range(3):
-            resp = requests.post(self._URL, json=body, headers=headers, timeout=self._timeout)
-            resp.raise_for_status()
-            data = resp.json()
+            data = or_chat_completion(
+                body, api_key=self._key, x_title="agent-research-panel",
+                timeout=self._timeout,
+            )
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             text = msg.get("content") or ""
-            usage = data.get("usage") or {}
-            tokens_in = int(usage.get("prompt_tokens") or 0)
-            tokens_out = int(usage.get("completion_tokens") or 0)
-            c = usage.get("cost")
-            cost += float(c) if c is not None else estimate_cost(model, tokens_in, tokens_out)
+            tokens_in, tokens_out, c = parse_or_usage(data.get("usage"))
+            cost += c if c is not None else estimate_cost(model, tokens_in, tokens_out)
             if text.strip():
                 break
         return LLMResponse(

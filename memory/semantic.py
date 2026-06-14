@@ -127,6 +127,32 @@ class SemanticStore:
         )
         return results
 
+    def delete_by_episode_ids(self, episode_ids: list[int]) -> int:
+        """Delete rows for the given episode ids; return a best-effort count.
+
+        Guarded like search()/count(): if the store/table is empty or unopened,
+        or the delete can't report a row count, return 0 rather than raising.
+        """
+        ids = [int(i) for i in episode_ids]
+        if not ids:
+            return 0
+        try:
+            before = self.table.count_rows()
+        except Exception:
+            return 0
+        if before == 0:
+            return 0
+        id_list = ",".join(str(i) for i in ids)
+        try:
+            self.table.delete(f"episode_id IN ({id_list})")
+        except Exception:
+            return 0
+        try:
+            after = self.table.count_rows()
+            return max(0, int(before) - int(after))
+        except Exception:
+            return 0
+
     def count(self) -> int:
         try:
             return int(self.table.count_rows())
