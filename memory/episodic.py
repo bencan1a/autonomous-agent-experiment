@@ -414,26 +414,14 @@ class EpisodicStore:
     ) -> None:
         """Mark a capability request resolved (e.g. 'granted'/'denied').
 
-        Updates the row's status, and ben_response if that column exists (it
-        does in the current schema). Does nothing observable beyond the UPDATE.
+        Updates the row's status and ben_response. Does nothing observable
+        beyond the UPDATE.
         """
         with self._conn() as conn:
-            cols = {
-                r[1]
-                for r in conn.execute(
-                    "PRAGMA table_info(capability_requests)"
-                ).fetchall()
-            }
-            if "ben_response" in cols:
-                conn.execute(
-                    "UPDATE capability_requests SET status = ?, ben_response = ? WHERE id = ?",
-                    (status, ben_response, request_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE capability_requests SET status = ? WHERE id = ?",
-                    (status, request_id),
-                )
+            conn.execute(
+                "UPDATE capability_requests SET status = ?, ben_response = ? WHERE id = ?",
+                (status, ben_response, request_id),
+            )
 
     # ---------- cost tracking ----------
 
