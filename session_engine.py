@@ -47,7 +47,7 @@ from openrouter_client import make_session_client, is_openrouter_model
 from session_common import _env, _execute_side_effects
 from tools.web_search import BraveSearch
 
-log = logging.getLogger("orchestrator.engine")
+logger = logging.getLogger("orchestrator.engine")
 
 DEFAULT_FALLBACK_MINUTES = 60
 DEFAULT_COMPACTION_TOKENS = 120_000
@@ -84,8 +84,8 @@ def run_decay(
         try:
             semantic.delete_by_episode_ids(stale_ids)
         except Exception:
-            log.exception("decay: failed to delete vectors for decayed episodes")
-    log.info("decay: deleted %d un-consolidated episode(s) past %sh", len(stale), decay_hours)
+            logger.exception("decay: failed to delete vectors for decayed episodes")
+    logger.info("decay: deleted %d un-consolidated episode(s) past %sh", len(stale), decay_hours)
     return brief
 
 
@@ -96,7 +96,7 @@ def run_decay(
 def _budget_pause_and_notify(
     slack: SlackClient | None, episodic: EpisodicStore, *, instance_id: str, reason: str,
 ) -> None:
-    log.warning("BUDGET PAUSE: %s", reason)
+    logger.warning("BUDGET PAUSE: %s", reason)
     # Unified pause: sets registry status='paused' AND clears the schedule, so
     # `list`/dashboard/orchestrator all agree (clearing cron alone left the
     # registry showing 'active').
@@ -104,7 +104,7 @@ def _budget_pause_and_notify(
         import instance_control
         instance_control.pause(instance_id, reason=f"budget: {reason}")
     except Exception:
-        log.exception("failed to pause instance on budget breach")
+        logger.exception("failed to pause instance on budget breach")
         cron_control.clear_instance(instance_id)
     msg = (
         ":octagonal_sign: *Agent paused — budget exceeded.*\n"
@@ -123,17 +123,17 @@ def _fatal_pause_and_notify(
     as a bad model slug that 404s). Pause the instance + clear its schedule so it
     can't crash-loop or sit as a zombie 'running' row, and notify the operator.
     Never raises (it runs from an except block)."""
-    log.error("FATAL SESSION ERROR (%s): %s", instance.id, reason)
+    logger.error("FATAL SESSION ERROR (%s): %s", instance.id, reason)
     try:
         import instance_control
         # Unified pause: registry status='paused' + schedule cleared together.
         instance_control.pause(instance.id, reason=f"fatal session error: {reason}")
     except Exception:
-        log.exception("failed to pause instance on fatal error")
+        logger.exception("failed to pause instance on fatal error")
         try:
             cron_control.clear_instance(instance.id)
         except Exception:
-            log.exception("failed to clear cron on fatal error")
+            logger.exception("failed to clear cron on fatal error")
     msg = (
         ":rotating_light: *Agent paused — session error.*\n"
         f"{reason}\n"
@@ -145,12 +145,12 @@ def _fatal_pause_and_notify(
             if slack.dm_ben(msg):
                 episodic.log_ben_contact(invocation_num=None, direction="out", channel="dm", body=msg)
         except Exception:
-            log.exception("failed to notify operator on fatal error")
+            logger.exception("failed to notify operator on fatal error")
 
 
 def _install_signal_handlers(*, instance: Instance, episodic: EpisodicStore, box: dict[str, Any]) -> None:
     def handler(signum: int, _frame: Any) -> None:
-        log.warning("Received signal %d; cleaning up", signum)
+        logger.warning("Received signal %d; cleaning up", signum)
         sid = box.get("session_id")
         if sid is not None:
             try:
@@ -221,12 +221,12 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
     try:
         cron_control.remove_instance_entries(instance.id)
     except Exception:
-        log.exception("Failed to remove cron entry; continuing")
+        logger.exception("Failed to remove cron entry; continuing")
 
     # Step 1 — lockfile.
     if not lockfile.acquire(instance.lock_path):
         held = lockfile.read_pid(instance.lock_path)
-        log.warning("Another orchestrator running for %s (pid=%s); exiting", instance.id, held)
+        logger.warning("Another orchestrator running for %s (pid=%s); exiting", instance.id, held)
         return None
     atexit.register(lockfile.release, instance.lock_path)
 
@@ -248,12 +248,12 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
             chat_channel=slack_cfg.get("chat_channel"),
         )
     except Exception:
-        log.exception("Slack init failed; continuing without Slack")
+        logger.exception("Slack init failed; continuing without Slack")
         slack = None
     try:
         brave: BraveSearch | None = BraveSearch(_env("BRAVE_API_KEY", required=True))
     except Exception:
-        log.exception("Brave init failed; web_search will error")
+        logger.exception("Brave init failed; web_search will error")
         brave = None
     # params (config over env defaults)
     model = instance.model
@@ -286,7 +286,7 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
             if ent is not None:
                 ent["last_wake"] = now_iso()
     except Exception:
-        log.exception("Failed to update registry last_wake; continuing")
+        logger.exception("Failed to update registry last_wake; continuing")
 
     # Step 2 — budget preflight.
     if episodic.cost_today() >= daily_budget:
@@ -307,7 +307,7 @@ def setup_session(instance: Instance) -> SessionRuntime | None:
     box["session_id"] = session_id
     started_at = now_iso()
     t_start = time.monotonic()
-    log.info("%s session %d started (invocation %d, pid %d)",
+    logger.info("%s session %d started (invocation %d, pid %d)",
              instance.version, session_id, invocation_num, os.getpid())
 
     # inbound chat from Ben (also used to seed the reload context)
@@ -419,7 +419,7 @@ def finalize_stats(
                                 status="killed" if fatal_error else "finished",
                                 end_reason=end_reason)
     except Exception:
-        log.exception("Failed to finalize session stats")
+        logger.exception("Failed to finalize session stats")
 
 
 def fatal_pause(rt: SessionRuntime, fatal_error: str) -> None:
@@ -453,12 +453,20 @@ def run_post_session_panel(rt: SessionRuntime) -> None:
             semantic=rt.semantic, agent_root=rt.instance.root.parent.parent,
         )
     except Exception:
-        log.exception("Research panel failed; continuing to schedule next wake")
+        logger.exception("Research panel failed; continuing to schedule next wake")
 
 
-def schedule_next_wake(rt: SessionRuntime, minutes_from_now: int | None) -> None:
+def schedule_next_wake(
+    rt: SessionRuntime, minutes_from_now: int | None,
+    *, min_minutes: int = cron_control.MIN_INTERVAL_MINUTES,
+) -> None:
     """Install the one-shot cron for the next wake. ``None`` means the agent chose
     not to reschedule (v2 only) — clear the entry instead.
+
+    ``min_minutes`` is the wake-interval floor forwarded to the single clamp
+    authority (``cron_control.install_instance_one_shot``). v2 passes its
+    configured ``min_interval_minutes``; v3/v4/v5 use the default
+    ``MIN_INTERVAL_MINUTES``.
 
     If the operator paused the instance DURING the session (its registry status is
     now 'paused'), honor that: skip the reschedule and clear any cron, so the
@@ -469,18 +477,20 @@ def schedule_next_wake(rt: SessionRuntime, minutes_from_now: int | None) -> None
     from instances_common import load_registry, registry_entry
     ent = registry_entry(load_registry(), rt.instance.id)
     if ent is not None and ent.get("status") == "paused":
-        log.info("Instance paused during the session; skipping reschedule, clearing cron.")
+        logger.info("Instance paused during the session; skipping reschedule, clearing cron.")
         try:
             cron_control.clear_instance(rt.instance.id)
         except Exception:
-            log.exception("Failed to clear cron for paused instance")
+            logger.exception("Failed to clear cron for paused instance")
         return
     if minutes_from_now is None:
-        log.info("No next wake scheduled; cron entry cleared.")
+        logger.info("No next wake scheduled; cron entry cleared.")
         cron_control.clear_instance(rt.instance.id)
         return
     try:
-        cron_control.install_instance_one_shot(rt.instance.id, minutes_from_now=minutes_from_now)
-        log.info("Next wake scheduled in %d min", minutes_from_now)
+        cron_control.install_instance_one_shot(
+            rt.instance.id, minutes_from_now=minutes_from_now, min_minutes=min_minutes,
+        )
+        logger.info("Next wake scheduled in %d min", minutes_from_now)
     except Exception:
-        log.exception("Failed to install cron entry")
+        logger.exception("Failed to install cron entry")

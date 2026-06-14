@@ -43,6 +43,47 @@ def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return (tokens_in / 1_000_000) * p["in"] + (tokens_out / 1_000_000) * p["out"]
 
 
+def _turn_cost(
+    model: str,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int,
+    cache_creation: int,
+    actual_cost: float | None = None,
+) -> float:
+    """Cost for one model turn, accounting for cache reads (10%) and writes (125%).
+
+    When ``actual_cost`` is given (OpenRouter reports a real per-call cost) it is
+    used verbatim; otherwise the cost is estimated from the per-model pricing
+    table. v1 (Anthropic-only) always passes ``actual_cost=None``, so its math is
+    identical to the legacy local copy this replaced.
+    """
+    if actual_cost is not None:
+        return actual_cost
+    p = _pricing_for(model)
+    base_in = p["in"] / 1_000_000
+    base_out = p["out"] / 1_000_000
+    return (
+        input_tokens * base_in
+        + output_tokens * base_out
+        + cache_read * base_in * 0.1
+        + cache_creation * base_in * 1.25
+    )
+
+
+def _usage(resp: Any) -> tuple[int, int, int, int]:
+    """Extract (input, output, cache_read, cache_creation) token counts from a
+    model response's ``usage`` block, defaulting any missing field to 0."""
+    u = resp.usage
+    return (
+        getattr(u, "input_tokens", 0) or 0,
+        getattr(u, "output_tokens", 0) or 0,
+        getattr(u, "cache_read_input_tokens", 0) or 0,
+        getattr(u, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
 def _extract_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
     """Best-effort JSON extraction from the model's text response."""
     if not text:

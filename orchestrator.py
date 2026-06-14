@@ -49,10 +49,10 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ],
 )
-log = logging.getLogger("orchestrator")
+logger = logging.getLogger("orchestrator")
 
 from agent_tools.registry import TOOLS_SPEC, ToolContext, dispatch  # noqa: E402
-from claude_client import _pricing_for  # noqa: E402
+from claude_client import _turn_cost  # noqa: E402
 from communications.slack_client import (  # noqa: E402
     SlackClient,
     format_episode_for_observer,
@@ -114,8 +114,16 @@ def _budget_pause_and_notify(
     instance_id: str,
     reason: str,
 ) -> None:
-    log.warning("BUDGET PAUSE: %s", reason)
-    cron_control.clear_instance(instance_id)
+    logger.warning("BUDGET PAUSE: %s", reason)
+    # Unified pause: sets registry status='paused' AND clears the schedule, so
+    # `list`/dashboard/orchestrator all agree (clearing cron alone left the
+    # registry showing 'active'). Mirrors session_engine._budget_pause_and_notify.
+    try:
+        import instance_control
+        instance_control.pause(instance_id, reason=f"budget: {reason}")
+    except Exception:
+        logger.exception("failed to pause instance on budget breach")
+        cron_control.clear_instance(instance_id)
     msg = (
         ":octagonal_sign: *Agent paused — budget exceeded.*\n"
         f"{reason}\n"
@@ -142,26 +150,6 @@ def _tools_with_cache_control() -> list[dict[str, Any]]:
     return spec
 
 
-def _turn_cost(
-    model: str,
-    *,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read: int,
-    cache_creation: int,
-) -> float:
-    """Cost for one turn, accounting for cache reads (10%) and writes (125%)."""
-    p = _pricing_for(model)
-    base_in = p["in"] / 1_000_000
-    base_out = p["out"] / 1_000_000
-    return (
-        input_tokens * base_in
-        + output_tokens * base_out
-        + cache_read * base_in * 0.1
-        + cache_creation * base_in * 1.25
-    )
-
-
 def _summarize_actions(actions: list[dict[str, Any]]) -> list[str]:
     """Return ['tool_name (count)' ...] for log_episode.actions_taken."""
     counts = Counter(a["tool_name"] for a in actions if a.get("tool_name"))
@@ -185,13 +173,13 @@ def _install_signal_handlers(
     session_id_box: dict[str, int | None],
 ) -> None:
     def handler(signum: int, _frame: Any) -> None:
-        log.warning("Received signal %d; cleaning up", signum)
+        logger.warning("Received signal %d; cleaning up", signum)
         sid = session_id_box.get("id")
         if sid is not None:
             try:
                 episodic.end_session(sid, status="killed", end_reason=f"signal_{signum}")
             except Exception:
-                log.exception("Failed to mark session killed on signal")
+                logger.exception("Failed to mark session killed on signal")
         try:
             lockfile.release(instance.lock_path)
         except Exception:
@@ -201,9 +189,9 @@ def _install_signal_handlers(
                 instance.id,
                 minutes_from_now=DEFAULT_FALLBACK_MINUTES,
             )
-            log.info("Installed fallback cron entry on signal exit")
+            logger.info("Installed fallback cron entry on signal exit")
         except Exception:
-            log.exception("Failed to install fallback cron on signal")
+            logger.exception("Failed to install fallback cron on signal")
         sys.exit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)
@@ -273,9 +261,9 @@ def _run_tool_use_loop(
                     "next_invoke_minutes": None,
                     "end_reason": f"forced_{limit_hit}",
                 }
-                log.warning("Forcing finish: limit=%s", limit_hit)
+                logger.warning("Forcing finish: limit=%s", limit_hit)
                 break
-            log.warning("Safety limit hit (%s); asking agent to finish", limit_hit)
+            logger.warning("Safety limit hit (%s); asking agent to finish", limit_hit)
             messages.append({
                 "role": "user",
                 "content": [{
@@ -302,7 +290,7 @@ def _run_tool_use_loop(
                 messages=messages,
             )
         except Exception:
-            log.exception("Anthropic messages.create failed")
+            logger.exception("Anthropic messages.create failed")
             ctx.finish_state = {
                 "current_focus": None,
                 "internal_state": None,
@@ -330,7 +318,7 @@ def _run_tool_use_loop(
         total_cache_read += cr_t
         total_cache_creation += cc_t
         total_cost += turn_cost
-        log.info(
+        logger.info(
             "turn stop_reason=%s in=%d out=%d cache_read=%d cache_creation=%d cost=$%.4f total=$%.4f",
             response.stop_reason, in_t, out_t, cr_t, cc_t, turn_cost, total_cost,
         )
@@ -348,7 +336,7 @@ def _run_tool_use_loop(
                 try:
                     result = dispatch(tu.name, dict(tu.input or {}), ctx)
                 except Exception as e:
-                    log.exception("Dispatch raised for %s", tu.name)
+                    logger.exception("Dispatch raised for %s", tu.name)
                     result = {"error": f"{type(e).__name__}: {e}"}
                 duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -367,7 +355,7 @@ def _run_tool_use_loop(
                         duration_ms,
                     )
                 except Exception:
-                    log.exception("Failed to log action %s", tu.name)
+                    logger.exception("Failed to log action %s", tu.name)
 
                 content_for_model = result_text
                 if len(content_for_model) > TOOL_RESULT_TRUNC:
@@ -386,7 +374,7 @@ def _run_tool_use_loop(
                 try:
                     if episodic.cost_today() + total_cost >= daily_budget or \
                             episodic.cost_last_7_days() + total_cost >= weekly_budget:
-                        log.warning("Budget recheck tripped mid-session; forcing finish")
+                        logger.warning("Budget recheck tripped mid-session; forcing finish")
                         ctx.finish_state = {
                             "current_focus": None,
                             "internal_state": None,
@@ -396,12 +384,12 @@ def _run_tool_use_loop(
                             "end_reason": "forced_budget",
                         }
                 except Exception:
-                    log.exception("Budget recheck failed")
+                    logger.exception("Budget recheck failed")
 
             # Honor pause request (clear after handling).
             if ctx.pause_requested_seconds:
                 secs = int(ctx.pause_requested_seconds)
-                log.info("Pause requested: %d seconds", secs)
+                logger.info("Pause requested: %d seconds", secs)
                 time.sleep(secs)
                 ctx.pause_requested_seconds = None
                 messages.append({
@@ -415,7 +403,7 @@ def _run_tool_use_loop(
         elif response.stop_reason == "end_turn":
             end_turn_without_finish += 1
             if end_turn_without_finish >= 2:
-                log.warning("Agent ended turn twice without finish_session; forcing finish")
+                logger.warning("Agent ended turn twice without finish_session; forcing finish")
                 ctx.finish_state = {
                     "current_focus": None,
                     "internal_state": None,
@@ -439,7 +427,7 @@ def _run_tool_use_loop(
 
         else:
             # max_tokens, stop_sequence, etc. Treat like end_turn-without-finish.
-            log.warning("Unexpected stop_reason=%s; treating as end_turn", response.stop_reason)
+            logger.warning("Unexpected stop_reason=%s; treating as end_turn", response.stop_reason)
             end_turn_without_finish += 1
             if end_turn_without_finish >= 2:
                 ctx.finish_state = {
@@ -480,12 +468,12 @@ def run_v1_session(instance: Instance) -> int:
     try:
         cron_control.remove_instance_entries(instance.id)
     except Exception:
-        log.exception("Failed to remove existing cron entry; continuing")
+        logger.exception("Failed to remove existing cron entry; continuing")
 
     # Step 1 — lockfile (single-instance).
     if not lockfile.acquire(instance.lock_path):
         held = lockfile.read_pid(instance.lock_path)
-        log.warning("Another orchestrator appears to be running (pid=%s); exiting", held)
+        logger.warning("Another orchestrator appears to be running (pid=%s); exiting", held)
         return 0
     atexit.register(lockfile.release, instance.lock_path)
 
@@ -504,7 +492,7 @@ def run_v1_session(instance: Instance) -> int:
             if ent is not None:
                 ent["last_wake"] = now_iso()
     except Exception:
-        log.exception("Failed to update registry last_wake; continuing")
+        logger.exception("Failed to update registry last_wake; continuing")
 
     session_id_box: dict[str, int | None] = {"id": None}
     _install_signal_handlers(
@@ -521,13 +509,13 @@ def run_v1_session(instance: Instance) -> int:
             chat_channel=slack_cfg.get("chat_channel"),
         )
     except Exception:
-        log.exception("Slack init failed; continuing without Slack")
+        logger.exception("Slack init failed; continuing without Slack")
         slack = None
 
     try:
         brave: BraveSearch | None = BraveSearch(_env("BRAVE_API_KEY", required=True))
     except Exception:
-        log.exception("Brave init failed; web_search will error")
+        logger.exception("Brave init failed; web_search will error")
         brave = None
 
     anthropic_client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY", required=True))
@@ -564,16 +552,16 @@ def run_v1_session(instance: Instance) -> int:
     try:
         written = run_weekly_compression(episodic, semantic)
         if written:
-            log.info("Wrote %d weekly summaries", len(written))
+            logger.info("Wrote %d weekly summaries", len(written))
     except Exception:
-        log.exception("Weekly compression failed; continuing")
+        logger.exception("Weekly compression failed; continuing")
 
     # Step 4 — session + context + tool-use loop.
     invocation_num = episodic.next_invocation_num()
     session_id = episodic.start_session(invocation_num, pid=os.getpid())
     session_id_box["id"] = session_id
     t_start = time.monotonic()
-    log.info("Session %d started for invocation %d (pid=%d)", session_id, invocation_num, os.getpid())
+    logger.info("Session %d started for invocation %d (pid=%d)", session_id, invocation_num, os.getpid())
 
     # Fetch any DMs Ben has sent since last we delivered. We persist the
     # newest seen ts only AFTER log_episode succeeds — so a crash mid-session
@@ -590,7 +578,7 @@ def run_v1_session(instance: Instance) -> int:
                 body=m["text"],
             )
         if inbound_dms:
-            log.info("Fetched %d inbound DM(s) from Ben", len(inbound_dms))
+            logger.info("Fetched %d inbound DM(s) from Ben", len(inbound_dms))
 
     inbound_texts = [m["text"] for m in inbound_dms]
     user_prompt, ctx_meta = assemble_context(
@@ -598,7 +586,7 @@ def run_v1_session(instance: Instance) -> int:
         workspace_dir=instance.workspace_dir,
         inbound_ben_messages=inbound_texts or None,
     )
-    log.info("Assembled context: %s (inbound_dms=%d)", ctx_meta, len(inbound_dms))
+    logger.info("Assembled context: %s (inbound_dms=%d)", ctx_meta, len(inbound_dms))
 
     ctx = ToolContext(
         episodic=episodic,
@@ -630,7 +618,7 @@ def run_v1_session(instance: Instance) -> int:
             t_start=t_start,
         )
     except Exception:
-        log.exception("Tool-use loop crashed")
+        logger.exception("Tool-use loop crashed")
         stats = {
             "tokens_in": 0, "tokens_out": 0,
             "cache_read": 0, "cache_creation": 0,
@@ -643,7 +631,10 @@ def run_v1_session(instance: Instance) -> int:
                 "next_invoke_minutes": None, "end_reason": "loop_crash",
             }
 
-    # Step 5 — finalize. Pull finish_state; clamp next_invoke_minutes.
+    # Step 5 — finalize. Pull finish_state and normalize next_invoke_minutes. The
+    # wake-interval floor is applied by the single clamp authority at reschedule
+    # time (install_instance_one_shot with min_minutes=min_interval_minutes), so
+    # here we only coerce the agent's chosen value to an int (or None).
     fs = ctx.finish_state or {
         "current_focus": None,
         "internal_state": None,
@@ -653,14 +644,9 @@ def run_v1_session(instance: Instance) -> int:
         "end_reason": "no_finish_called",
     }
     nim_raw = fs.get("next_invoke_minutes")
-    if isinstance(nim_raw, (int, float)):
-        nim = int(nim_raw)
-        if nim < min_interval_minutes:
-            log.warning("next_invoke_minutes=%d clamped to %d", nim, min_interval_minutes)
-            nim = min_interval_minutes
-        next_invoke_minutes: int | None = nim
-    else:
-        next_invoke_minutes = None
+    next_invoke_minutes: int | None = (
+        int(nim_raw) if isinstance(nim_raw, (int, float)) else None
+    )
 
     wall_clock = time.monotonic() - t_start
     session_actions = episodic.actions_for_session(session_id)
@@ -692,7 +678,7 @@ def run_v1_session(instance: Instance) -> int:
     if inbound_dms:
         newest_ts = max(m["ts"] for m in inbound_dms)
         episodic.set_meta("last_seen_ben_dm_ts", newest_ts)
-        log.info("Advanced last_seen_ben_dm_ts to %s", newest_ts)
+        logger.info("Advanced last_seen_ben_dm_ts to %s", newest_ts)
     episodic.add_cost(
         tokens_in=stats["tokens_in"],
         tokens_out=stats["tokens_out"],
@@ -728,7 +714,7 @@ def run_v1_session(instance: Instance) -> int:
                 text=emb_text,
             )
     except Exception:
-        log.exception("Embedding failed; episode is logged but not searchable")
+        logger.exception("Embedding failed; episode is logged but not searchable")
 
     # Mirror to observer channel (orchestrator-driven).
     if slack:
@@ -767,7 +753,7 @@ def run_v1_session(instance: Instance) -> int:
                 body=je,
             )
 
-    log.info(
+    logger.info(
         "Session %d done. tool_calls=%d wall=%.1fs tokens=%d/%d cache_r=%d cache_w=%d cost=$%.4f end=%s",
         session_id, stats["tool_calls"], wall_clock,
         stats["tokens_in"], stats["tokens_out"],
@@ -804,29 +790,24 @@ def run_v1_session(instance: Instance) -> int:
             semantic=semantic, agent_root=AGENT_ROOT,
         )
     except Exception:
-        log.exception("Research panel failed; continuing to schedule next wake")
+        logger.exception("Research panel failed; continuing to schedule next wake")
 
     # Step 7 — schedule next invocation.
     if next_invoke_minutes is None:
-        log.info("Agent chose not to reschedule. No cron entry installed.")
+        logger.info("Agent chose not to reschedule. No cron entry installed.")
         cron_control.clear_instance(instance.id)
     else:
         try:
             installed = cron_control.install_instance_one_shot(
                 instance.id,
                 minutes_from_now=next_invoke_minutes,
+                min_minutes=min_interval_minutes,
             )
-            log.info("Cron scheduled: %s", installed)
+            logger.info("Cron scheduled: %s", installed)
         except Exception:
-            log.exception("Failed to install cron entry")
+            logger.exception("Failed to install cron entry")
 
     return 0
-
-
-def run_v2_session(instance: Instance) -> int:
-    """v2 'environmental' tick loop (forced wakefulness logged-not-enforced + decay)."""
-    from v2_session import run_v2_session as _run_v2
-    return _run_v2(instance)
 
 
 def main() -> int:
@@ -838,21 +819,22 @@ def main() -> int:
     instance.ensure_dirs()
     _configure_instance_logging(instance)
 
-    log.info("Resolved instance %s (name=%s version=%s model=%s)",
+    logger.info("Resolved instance %s (name=%s version=%s model=%s)",
              instance.id, instance.name, instance.version, instance.model)
 
     import instance_control
     if instance_control.is_paused(instance.id):
-        log.info("Instance %s is PAUSED (operator maintenance); removing any cron entry and exiting without running a session.", instance.id)
+        logger.info("Instance %s is PAUSED (operator maintenance); removing any cron entry and exiting without running a session.", instance.id)
         try:
             cron_control.remove_instance_entries(instance.id)
         except Exception:
-            log.exception("failed to remove cron entry while paused")
+            logger.exception("failed to remove cron entry while paused")
         return 0
 
     if instance.version == "v1":
         return run_v1_session(instance)
     if instance.version == "v2":
+        from v2_session import run_v2_session
         return run_v2_session(instance)
     if instance.version == "v3":
         from v3_session import run_v3_session
@@ -863,7 +845,7 @@ def main() -> int:
     if instance.version == "v5":
         from v5_session import run_v5_session
         return run_v5_session(instance)
-    log.error("Instance %s has unknown version %r; aborting", instance.id, instance.version)
+    logger.error("Instance %s has unknown version %r; aborting", instance.id, instance.version)
     return 1
 
 
@@ -871,5 +853,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        log.exception("Unhandled exception in orchestrator")
+        logger.exception("Unhandled exception in orchestrator")
         sys.exit(1)

@@ -111,15 +111,22 @@ def remove_instance_entries(instance_id: str) -> int:
 
 
 def install_instance_one_shot(
-    instance_id: str, *, minutes_from_now: int, command: str | None = None
+    instance_id: str, *, minutes_from_now: int,
+    min_minutes: int = MIN_INTERVAL_MINUTES, command: str | None = None,
 ) -> str:
-    """Install a single (marker, entry) pair firing once at now+minutes."""
-    if minutes_from_now < MIN_INTERVAL_MINUTES:
+    """Install a single (marker, entry) pair firing once at now+minutes.
+
+    This is the SINGLE authority on the wake-interval floor: ``minutes_from_now``
+    is clamped to ``min_minutes`` (default ``MIN_INTERVAL_MINUTES``). Callers that
+    expose a per-instance ``min_interval_minutes`` knob pass it here rather than
+    pre-clamping, so the config value is honored exactly (e.g. an operator-set
+    floor of 10 is respected instead of being silently bumped back to 30)."""
+    if minutes_from_now < min_minutes:
         logger.warning(
             "Requested interval %d below minimum %d; clamping",
-            minutes_from_now, MIN_INTERVAL_MINUTES,
+            minutes_from_now, min_minutes,
         )
-        minutes_from_now = MIN_INTERVAL_MINUTES
+        minutes_from_now = min_minutes
 
     cmd = command or cron_command(instance_id)
     # cron uses local server time; use naive 'now' to match.

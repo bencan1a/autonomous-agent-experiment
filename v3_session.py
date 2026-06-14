@@ -70,7 +70,7 @@ from session_common import (
     tools_with_cache_control,
 )
 
-log = logging.getLogger("orchestrator.v3")
+logger = logging.getLogger("orchestrator.v3")
 
 UTC = timezone.utc
 
@@ -91,7 +91,7 @@ def run_v3_session(instance: Instance) -> int:
     sleep_min_hi = float(cfg.get("sleep_minutes_max", 260))
     awake_min = random.uniform(awake_min_lo, awake_min_hi)
     wind_down_seconds = awake_min * 60.0
-    log.info("v3 session %d awake window %.1f min", rt.session_id, awake_min)
+    logger.info("v3 session %d awake window %.1f min", rt.session_id, awake_min)
 
     system_blocks = _system_blocks(build_v3_system_prompt(decay_hours=rt.decay_hours), rt.caching)
     tools = tools_with_cache_control(TOOLS_SPEC_V3, rt.caching)
@@ -124,7 +124,7 @@ def run_v3_session(instance: Instance) -> int:
         elapsed = time.monotonic() - rt.t_start
         if elapsed >= rt.max_wall:
             end_reason = "wall_clock_cap"
-            log.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
+            logger.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
             break
         if num_ticks >= MAX_TICKS_PER_SESSION:
             end_reason = "max_ticks"
@@ -141,7 +141,7 @@ def run_v3_session(instance: Instance) -> int:
                 ctx=rt.ctx, episodic=rt.episodic, session_id=rt.session_id,
             )
         except Exception as exc:  # noqa: BLE001 — model/API error must not zombie the session
-            log.exception("Fatal error during tick %d; ending session", num_ticks + 1)
+            logger.exception("Fatal error during tick %d; ending session", num_ticks + 1)
             fatal_error = f"{type(exc).__name__}: {exc}"
             end_reason = "session_error"
             break
@@ -172,14 +172,14 @@ def run_v3_session(instance: Instance) -> int:
         if hit:
             distress_alerts += 1
             alert = f"[distress monitor] tick {num_ticks} — possible distress/degradation:\n{excerpt}"
-            log.warning("v3 distress tripwire: %s", alert)
+            logger.warning("v3 distress tripwire: %s", alert)
             if rt.slack:
                 try:
                     rt.slack.dm_ben(alert)
                 except Exception:
-                    log.exception("failed to post distress alert")
+                    logger.exception("failed to post distress alert")
 
-        log.info("tick %d: focus=%r would_end_now=%s tools=%d cost=$%.4f cache_r=%d elapsed=%.0fs/%.0fs",
+        logger.info("tick %d: focus=%r would_end_now=%s tools=%d cost=$%.4f cache_r=%d elapsed=%.0fs/%.0fs",
                  num_ticks, ts.get("tick_focus"), bool(would_end),
                  tick.tool_calls, tick.cost_usd, tick.cache_read, elapsed, wind_down_seconds)
 
@@ -220,7 +220,7 @@ def run_v3_session(instance: Instance) -> int:
             distress_alerts=distress_alerts,
         )
     except Exception:
-        log.exception("Failed to write v3 session record")
+        logger.exception("Failed to write v3 session record")
 
     if rt.inbound_dms:
         try:
@@ -231,10 +231,10 @@ def run_v3_session(instance: Instance) -> int:
     # Fatal error: pause + notify instead of the normal summary/reschedule.
     if fatal_error:
         fatal_pause(rt, fatal_error)
-        log.error("v3 session %d ended on fatal error: %s", rt.session_id, fatal_error)
+        logger.error("v3 session %d ended on fatal error: %s", rt.session_id, fatal_error)
         return 0
 
-    log.info(
+    logger.info(
         "v3 session %d ended: reason=%s ticks=%d awake=%.1fm (planned %.1fm) "
         "would_end_now=%d (first@%s) cost=$%.4f cache_read=%d consolidated=%d "
         "decayed=%d distress_alerts=%d next_wake=%.1fm",
