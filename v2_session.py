@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent_tools.registry import TOOLS_SPEC_V2, ToolContext, dispatch
-from claude_client import _pricing_for
+from claude_client import _turn_cost, _usage
 from instances_common import Instance, notes_path, now_iso
 from memory.episodic import EpisodicStore
 from memory.semantic import SemanticStore
@@ -49,7 +49,7 @@ from session_engine import (
     setup_session,
 )
 
-log = logging.getLogger("orchestrator.v2")
+logger = logging.getLogger("orchestrator.v2")
 
 UTC = timezone.utc
 TOOL_RESULT_TRUNC = 6000
@@ -57,36 +57,8 @@ MAX_TICK_TOOL_CALLS = 40        # safety: tool calls within a single tick
 MAX_TICKS_PER_SESSION = 400     # safety: hard ceiling on ticks
 
 
-# --------------------------------------------------------------------------- #
-# cost
-# --------------------------------------------------------------------------- #
-
-def _turn_cost(
-    model: str, *, input_tokens: int, output_tokens: int,
-    cache_read: int, cache_creation: int, actual_cost: float | None = None,
-) -> float:
-    """Compute turn cost. Uses OpenRouter's actual reported cost when provided."""
-    if actual_cost is not None:
-        return actual_cost
-    p = _pricing_for(model)
-    base_in = p["in"] / 1_000_000
-    base_out = p["out"] / 1_000_000
-    return (
-        input_tokens * base_in
-        + output_tokens * base_out
-        + cache_read * base_in * 0.1
-        + cache_creation * base_in * 1.25
-    )
-
-
-def _usage(resp: Any) -> tuple[int, int, int, int]:
-    u = resp.usage
-    return (
-        getattr(u, "input_tokens", 0) or 0,
-        getattr(u, "output_tokens", 0) or 0,
-        getattr(u, "cache_read_input_tokens", 0) or 0,
-        getattr(u, "cache_creation_input_tokens", 0) or 0,
-    )
+# _turn_cost / _usage (the canonical cost+usage helpers) now live in
+# claude_client.py and are imported above, shared with v1 (orchestrator).
 
 
 # --------------------------------------------------------------------------- #
@@ -282,7 +254,7 @@ def compact_session_transcript(
             b.text for b in resp.content if getattr(b, "type", None) == "text"
         )
     except Exception:
-        log.exception("compaction summary failed; leaving transcript intact")
+        logger.exception("compaction summary failed; leaving transcript intact")
         return
     messages.clear()
     messages.append(head)
@@ -290,7 +262,7 @@ def compact_session_transcript(
         "role": "user",
         "content": f"[Earlier in this session, summarized to save context]\n{summary}",
     })
-    log.info("compacted in-session transcript")
+    logger.info("compacted in-session transcript")
 
 
 # --------------------------------------------------------------------------- #
@@ -444,7 +416,7 @@ def run_v2_session(instance: Instance) -> int:
         elapsed = time.monotonic() - rt.t_start
         if elapsed >= rt.max_wall:
             end_reason = "wall_clock_cap"
-            log.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
+            logger.warning("wall-clock cap reached (%.0fs); ending session", elapsed)
             break
         if num_ticks >= MAX_TICKS_PER_SESSION:
             end_reason = "max_ticks"
@@ -457,7 +429,7 @@ def run_v2_session(instance: Instance) -> int:
                 ctx=rt.ctx, episodic=rt.episodic, session_id=rt.session_id,
             )
         except Exception as exc:  # noqa: BLE001 — model/API error must not zombie the session
-            log.exception("Fatal error during tick %d; ending session", num_ticks + 1)
+            logger.exception("Fatal error during tick %d; ending session", num_ticks + 1)
             fatal_error = f"{type(exc).__name__}: {exc}"
             end_reason = "session_error"
             break
@@ -477,7 +449,7 @@ def run_v2_session(instance: Instance) -> int:
         nim = ts.get("next_invoke_minutes") if ts.get("end_session") else None
         record_episode(rt, ts, tick, elapsed=elapsed, next_invoke_minutes=nim)
 
-        log.info("tick %d: focus=%r end_session=%s tools=%d cost=$%.4f cache_r=%d",
+        logger.info("tick %d: focus=%r end_session=%s tools=%d cost=$%.4f cache_r=%d",
                  num_ticks, ts.get("tick_focus"), ts.get("end_session"),
                  tick.tool_calls, tick.cost_usd, tick.cache_read)
 
@@ -497,14 +469,12 @@ def run_v2_session(instance: Instance) -> int:
     elapsed = time.monotonic() - rt.t_start
     ended_early = bool(end_reason == "agent_ended" and elapsed < min_wake_seconds)
 
-    if isinstance(next_invoke_minutes, (int, float)):
-        nim = int(next_invoke_minutes)
-        if nim < min_interval_minutes:
-            log.warning("next_invoke_minutes=%d clamped to %d", nim, min_interval_minutes)
-            nim = min_interval_minutes
-        next_invoke_minutes = nim
-    else:
-        next_invoke_minutes = None
+    # The wake-interval floor is applied by the single clamp authority at
+    # reschedule time (schedule_next_wake -> install_instance_one_shot), so here we
+    # only normalize the agent's chosen value to an int (or None).
+    next_invoke_minutes = (
+        int(next_invoke_minutes) if isinstance(next_invoke_minutes, (int, float)) else None
+    )
 
     finalize_stats(rt, end_reason=end_reason, fatal_error=fatal_error,
                    num_ticks=num_ticks, session_cost=session_cost, total_tool_calls=total_tool_calls)
@@ -516,7 +486,7 @@ def run_v2_session(instance: Instance) -> int:
             decayed_count=len(rt.decayed), consolidated_count=consolidated_count,
         )
     except Exception:
-        log.exception("Failed to write v2 session record")
+        logger.exception("Failed to write v2 session record")
 
     if rt.inbound_dms:
         try:
@@ -527,10 +497,10 @@ def run_v2_session(instance: Instance) -> int:
     # Fatal error: pause + notify instead of the normal summary/reschedule.
     if fatal_error:
         fatal_pause(rt, fatal_error)
-        log.error("v2 session %d ended on fatal error: %s", rt.session_id, fatal_error)
+        logger.error("v2 session %d ended on fatal error: %s", rt.session_id, fatal_error)
         return 0
 
-    log.info(
+    logger.info(
         "v2 session %d ended: reason=%s ticks=%d elapsed=%.1fm min_wake=%.1fm early=%s "
         "cost=$%.4f cache_read=%d consolidated=%d decayed=%d next_invoke=%s",
         rt.session_id, end_reason, num_ticks, elapsed / 60, min_wake_seconds / 60,
@@ -553,5 +523,5 @@ def run_v2_session(instance: Instance) -> int:
     if not post_session_budget_ok(rt):
         return 0
     run_post_session_panel(rt)
-    schedule_next_wake(rt, next_invoke_minutes)
+    schedule_next_wake(rt, next_invoke_minutes, min_minutes=min_interval_minutes)
     return 0
