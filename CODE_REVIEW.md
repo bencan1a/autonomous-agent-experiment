@@ -76,12 +76,12 @@ data: `_control_authorized` moved to `data.py` (the control blueprint no longer 
 the app, which would have double-loaded it run-as-script), and `template_folder` made absolute
 (a relative one 500s the no-instances page unless launched with an absolute script path).
 
-**Open follow-ups (not blocking):**
+**Open follow-ups:**
 - `experiments/v3-circadian.md`'s formal spec block is **NEW and needs operator approval**
-  (its hash is unapproved by design — run the operationalize/approve flow).
-- Full-repo logger-var sweep (P3-2) was intentionally scoped to the session-loop files only.
-- Repo-root `README.md` still describes v1/v2 conceptually (only `experiments/README.md` was
-  updated to v1–v5).
+  (its hash is unapproved by design — run the operationalize/approve flow). **← only item left.**
+- ~~Full-repo logger-var sweep (P3-2)~~ DONE 2026-06-14 — all modules now bind `logger`.
+- ~~Repo-root `README.md` v1/v2-only~~ DONE 2026-06-14 — rewritten to cover v1–v5 +
+  session_engine + research/ + the dashboard package + `run_all.py`.
 
 ---
 
