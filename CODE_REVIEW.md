@@ -28,6 +28,51 @@
 
 **Remaining tiers:** P1-1, P1-2, P1-3, P1-4, P1-5, P1-6 · P2-1, P2-3 (script bootstrap), P2-4, P2-5, P2-6 · P3-2, P3-3, P3-4 (experiment-doc dedup + v3 doc), P3-5.
 
+## Progress & decisions (updated 2026-06-14 — remaining punch list cleared)
+
+Every remaining tier above was completed across one serial fix + five parallel
+worktree streams; the suite is **15/15 green** on `main`. Summary:
+
+- **P1-2 / P1-4** (finished the stranded WIP + the green-fix): one shared OpenRouter
+  transport (`or_chat_completion`/`parse_or_usage`); `make_session_client(model)` made
+  test-patchable (was breaking the suite via `isinstance` vs a faked `anthropic`);
+  `run_decay` deletes decayed (un-consolidated only) episodes' vectors via
+  `SemanticStore.delete_by_episode_ids`.
+- **P1-1 / P3-5** — `ToolContext` carries `model`+`client`; `spawn_subagent` honors the
+  session model/provider and uses provider-reported actual cost. `or_cost_or_estimate`
+  WARNS on the OpenRouter estimate fallback (kept the conservative Opus-tier default —
+  over-estimates → budget guard trips early); transport now retries 429+5xx with bounded
+  backoff; research provider accumulates tokens+cost consistently across retries.
+- **P1-5 / P2-6 / P3-2** — `_turn_cost`/`_usage` moved to `claude_client.py` (v1+v2 share
+  them); v1 budget pause now sets registry `status='paused'`; single wake-clamp authority
+  in `cron_control.install_instance_one_shot(min_minutes=…)`; logger var standardized to
+  `logger` in the session-loop files (full-repo sweep left as a follow-up), v2 dispatch
+  wrapper inlined, stale pytest docstrings removed.
+- **P1-6 / P2-1 / P3-1** — shared `memory/sqlite_base.py` (`_conn` + `run_idempotent_alters`)
+  used by both stores; `log_v{2,3,4}_session`/`recent_v{N}_sessions` collapsed onto generated
+  SQL (three pairs — v5 has no sessions table); dead `resolve_capability_request` PRAGMA branch
+  removed.
+- **P2-4 / P2-5** — comms failures now include an `error` key (so failed posts log as errors);
+  `_as_int` clamps `count`/`k`/`n`; one `send_capability_request` helper; Slack `_post` retries
+  once on 429 (capped Retry-After); "three channels" docstrings → four.
+- **P1-3 / P3-3** — dashboard `_version_session_panel` + `_bundle_projection` (Markdown/JSON API
+  output verified byte-identical); template `_macros.html` (research-note card + status pill),
+  dead `header_meta` removed from all 10 templates, pausable auto-refresh on logs/session,
+  `promoted_claims` unified to `[:5]`. **Blueprint split deliberately deferred** (no dashboard
+  tests + no runtime instance data to verify `url_for`/`/api` exemption safely).
+- **P2-3 / P3-4** — `research/clients.py` `research_clients()` bootstrap used at all 6 sites
+  (`override=True` in one place); added `experiments/v3-circadian.md`; deduped v4×3/v5×2 docs
+  into `_v4-base.md`/`_v5-base.md` with **every yaml spec block byte-identical** (all 5
+  `spec_hash`es verified unchanged — no panel reverts to pending_approval).
+
+**Open follow-ups (not blocking):**
+- `experiments/v3-circadian.md`'s formal spec block is **NEW and needs operator approval**
+  (its hash is unapproved by design — run the operationalize/approve flow).
+- Full-repo logger-var sweep (P3-2) and the dashboard blueprint split (P1-3 stretch) were
+  intentionally left out of scope.
+- Repo-root `README.md` still describes v1/v2 conceptually (only `experiments/README.md` was
+  updated to v1–v5).
+
 ---
 
 ## Executive summary
