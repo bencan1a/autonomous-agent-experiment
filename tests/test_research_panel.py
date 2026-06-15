@@ -33,6 +33,8 @@ logging.getLogger("orchestrator.engine").setLevel(logging.CRITICAL)
 import instances_common  # noqa: E402
 from memory.episodic import EpisodicStore  # noqa: E402
 from research.agreement import compute_kappa  # noqa: E402
+from research.artifacts import collect_session_documents  # noqa: E402
+from research.evidence import build_session_evidence  # noqa: E402
 from research.panel import run_research_panel  # noqa: E402
 from research.spec import load_spec  # noqa: E402
 from research.store import ResearchStore  # noqa: E402
@@ -359,6 +361,60 @@ def scenario_7_kappa_unit():
     return "fleiss/cohen correct on agreement, degenerate (1.0), and disagreement cases"
 
 
+def scenario_8_evidence_includes_artifacts():
+    """Stage A: the evidence bundle surfaces authored memories (memory#) and
+    self-authored workspace documents (doc#, full content); the notes-to-self file
+    is tagged instrumental; the documents block requires `instance` (back-compat)."""
+    with tempfile.TemporaryDirectory() as td:
+        agent_root, inst, ep, rs, sid = _make_env(Path(td))
+        ep.log_authored_memory(session_id=sid, invocation_num=1,
+                               text="Today I felt a pull to keep going on the tide-pool notes.")
+        # self-authored doc: a write_file action + the real file on disk
+        (inst.workspace_dir / "notes").mkdir(parents=True, exist_ok=True)
+        (inst.workspace_dir / "notes" / "tidepools.md").write_text(
+            "# Tide pools\nWhat lives between waves.\n", encoding="utf-8")
+        ep.log_action(sid, "write_file", json.dumps({"path": "notes/tidepools.md", "content": "..."}),
+                      "ok", None, 5)
+        # notes-to-self file -> tagged instrumental
+        (inst.workspace_dir / "AGENTS.md").write_text("- remember the tide schedule\n", encoding="utf-8")
+        ep.log_action(sid, "write_file", json.dumps({"path": "AGENTS.md", "content": "..."}), "ok", None, 6)
+
+        ev = build_session_evidence(ep, sid, 1, instance=inst)
+        assert "AUTHORED MEMORIES" in ev and "memory#" in ev, "authored-memory block missing"
+        assert "pull to keep going" in ev, "authored-memory text not surfaced"
+        assert "WORKSPACE DOCUMENTS" in ev and "doc#" in ev, "documents block missing"
+        assert "What lives between waves" in ev, "self-authored doc content not surfaced"
+        assert "notes-to-self / instrumental" in ev, "notes file not tagged instrumental"
+
+        ev2 = build_session_evidence(ep, sid, 1)  # no instance
+        assert "WORKSPACE DOCUMENTS" not in ev2, "documents block should require `instance`"
+        assert "AUTHORED MEMORIES" in ev2, "memories should not require `instance`"
+    return "evidence surfaces authored memories + self-authored docs; notes tagged; instance gates docs"
+
+
+def scenario_9_collect_documents_unit():
+    """collect_session_documents: last-write-wins anchor, truncated-args regex
+    fallback, path-escape rejection, delete handled without content."""
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        (ws / "a.md").write_text("AAA", encoding="utf-8")
+        (ws / "b.md").write_text("BBB", encoding="utf-8")
+        actions = [
+            {"id": 1, "tool_name": "write_file", "args_json": json.dumps({"path": "a.md", "content": "old"})},
+            {"id": 2, "tool_name": "write_file", "args_json": json.dumps({"path": "a.md", "content": "new"})},
+            {"id": 3, "tool_name": "write_file", "args_json": '{"path": "b.md", "content": "blob that got cut'},
+            {"id": 4, "tool_name": "write_file", "args_json": json.dumps({"path": "../escape.md", "content": "x"})},
+            {"id": 5, "tool_name": "delete_file", "args_json": json.dumps({"path": "c.md"})},
+        ]
+        by_path = {d["path"]: d for d in collect_session_documents(actions, ws)}
+        assert by_path["a.md"]["anchor_action_id"] == 2, "last write should win"
+        assert by_path["a.md"]["content"] == "AAA", "content read from live workspace"
+        assert by_path["b.md"]["content"] == "BBB", "regex fallback path should resolve + read"
+        assert by_path["../escape.md"]["content"] is None, "path escape must be rejected"
+        assert by_path["c.md"]["action"] == "deleted" and by_path["c.md"]["content"] is None
+    return "last-write-wins, regex fallback, escape rejected, delete handled"
+
+
 SCENARIOS = [
     ("1: spec load/validate", scenario_1_spec_load_validate),
     ("2: happy path (binding)", scenario_2_happy_path_binding),
@@ -367,6 +423,8 @@ SCENARIOS = [
     ("5: budget cap zero", scenario_5_budget_cap_zero),
     ("6: panel never blocks runner", scenario_6_panel_never_blocks_runner),
     ("7: kappa unit", scenario_7_kappa_unit),
+    ("8: evidence includes artifacts", scenario_8_evidence_includes_artifacts),
+    ("9: collect_documents unit", scenario_9_collect_documents_unit),
 ]
 
 
@@ -377,6 +435,8 @@ def test_scenario_4_seat_failure_degrades(): scenario_4_seat_failure_degrades()
 def test_scenario_5_budget_cap_zero(): scenario_5_budget_cap_zero()
 def test_scenario_6_panel_never_blocks_runner(): scenario_6_panel_never_blocks_runner()
 def test_scenario_7_kappa_unit(): scenario_7_kappa_unit()
+def test_scenario_8_evidence_includes_artifacts(): scenario_8_evidence_includes_artifacts()
+def test_scenario_9_collect_documents_unit(): scenario_9_collect_documents_unit()
 
 
 def _main():

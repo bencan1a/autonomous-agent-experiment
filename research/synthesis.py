@@ -73,13 +73,14 @@ def _note_summaries(notes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _spot_check_text(episodic, spot_sessions: list[dict[str, Any]]) -> str:
+def _spot_check_text(episodic, spot_sessions: list[dict[str, Any]], *, instance=None) -> str:
     parts = []
     budget = _SPOTCHECK_EVIDENCE_CAP
     for s in spot_sessions:
         if budget <= 0:
             break
-        ev = build_session_evidence(episodic, s["session_id"], s["invocation_num"], max_chars=budget)
+        ev = build_session_evidence(episodic, s["session_id"], s["invocation_num"],
+                                    max_chars=budget, instance=instance)
         parts.append(f"=== invocation #{s['invocation_num']} (raw) ===\n{ev}")
         budget -= len(ev)
     return "\n\n".join(parts)
@@ -218,7 +219,7 @@ def _run(*, instance, episodic, research_store, anthropic_client, agent_root, se
     # 2. Raw spot-checks (input only) → 3. adversarial red-team.
     critique = None
     if drafts and remaining() > 0:
-        spot_text = _spot_check_text(episodic, matrix.get("spot_check_sessions", []))
+        spot_text = _spot_check_text(episodic, matrix.get("spot_check_sessions", []), instance=instance)
         try:
             prov = provider_for(lenses[0].get("provider", "anthropic"))
             resp = prov.complete(

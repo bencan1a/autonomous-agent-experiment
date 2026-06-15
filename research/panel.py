@@ -189,7 +189,7 @@ def _run(
     coding_status = "binding" if prereg.get("status") == "approved" else "provisional"
 
     # 2. Evidence bundle (pure, once) + foundational program context.
-    evidence = build_session_evidence(episodic, session_id, invocation_num)
+    evidence = build_session_evidence(episodic, session_id, invocation_num, instance=instance)
     program_context = _load_program_context(agent_root, cfg)
     agent_model: str | None = getattr(instance, "model", None)
 

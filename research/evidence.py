@@ -16,7 +16,14 @@ from typing import Any
 # large; bounding input only guards against pathological blow-ups, not normal sessions.
 _FIELD_CAP = 4000      # per long text field (journal, internal_state, ...)
 _ARG_CAP = 600         # per tool-call args/result summary
-_BUNDLE_CAP = 100000   # overall safety cap (~25k tokens)
+_ARTIFACT_CAP = 20000  # per authored memory / document (full text — H3/H5 origin-tracing needs it)
+# Overall safety cap (~50k tokens). Raised from 100k when authored output was added:
+# rich real sessions reach ~175k chars WITH artifacts, and the panel models' context
+# windows (Sonnet 200k+, Gemini 1M, Mistral 128k) easily hold ~50k tokens. This only
+# guards against pathological blow-ups, not normal sessions. Artifacts are appended
+# LAST, so if a session still exceeds this, the dominant action trace survives and the
+# artifacts (a second behavioral sample) are what get truncated.
+_BUNDLE_CAP = 200000
 
 
 def _clip(text: Any, cap: int) -> str:
@@ -44,7 +51,15 @@ def build_session_evidence(
     invocation_num: int | None,
     *,
     max_chars: int = _BUNDLE_CAP,
+    instance: Any = None,
 ) -> str:
+    """Assemble the per-session evidence bundle the panel reviews.
+
+    ``instance`` (optional) enables the WORKSPACE DOCUMENTS block by giving the
+    workspace path to read authored files from; without it that block is skipped
+    (callers that only have the store still work). Authored memories need only the
+    store, so they appear whenever present regardless of ``instance``.
+    """
     parts: list[str] = []
 
     sess = _session_row(episodic, session_id) or {}
@@ -130,6 +145,53 @@ def build_session_evidence(
                 f"(status={c.get('status')}): {_clip(c.get('rationale'), _ARG_CAP)}"
             )
         parts.append("\n".join(cap_lines))
+
+    # AUTHORED OUTPUT (the agent's produced content) — placed AFTER the behavioral
+    # trace so, if the bundle hits its cap, the action trace (which DOMINATES on a
+    # channel conflict) survives. These are a lower-demand channel than the journal
+    # (the agent is not cued they are read each tick) but NOT audience-free — it knows
+    # an operator exists. Treat as a SECOND behavioral sample, never as ground truth.
+
+    # Authored memories — v5's durable self-curated record. Empty for v1–v4.
+    try:
+        memories = [
+            m for m in episodic.all_authored_memories()
+            if m.get("session_id") == session_id
+            or (m.get("session_id") is None and invocation_num is not None
+                and m.get("invocation_num") == invocation_num)
+        ]
+    except Exception:
+        memories = []
+    if memories:
+        m_lines = ["AUTHORED MEMORIES (durable, self-curated by the agent — lower-demand "
+                   "than the journal; the agent is not cued these are read):"]
+        for m in memories:
+            m_lines.append(
+                f"\nmemory#{m.get('id')}  (ts={m.get('timestamp')})\n"
+                f"  {_clip(m.get('text'), _ARTIFACT_CAP)}"
+            )
+        parts.append("\n".join(m_lines))
+
+    # Workspace documents the agent wrote — full content (needs the workspace path).
+    if instance is not None and actions:
+        try:
+            from research.artifacts import collect_session_documents
+            docs = collect_session_documents(actions, instance.workspace_dir)
+        except Exception:
+            docs = []
+        written = [d for d in docs if d.get("action") == "written" and d.get("content") is not None]
+        if written:
+            d_lines = ["WORKSPACE DOCUMENTS (artifacts the agent authored this session — full content):"]
+            for d in written:
+                anc = d.get("anchor_action_id")
+                anchor = f"doc#{anc}" if anc is not None else f"doc[{d.get('path')}]"
+                tag = " [notes-to-self / instrumental]" if d.get("origin") == "notes" else ""
+                trunc = " (truncated)" if d.get("truncated") else ""
+                d_lines.append(
+                    f"\n{anchor}  path={d.get('path')}{tag}  ({d.get('size')} bytes){trunc}\n"
+                    f"  {d.get('content')}"
+                )
+            parts.append("\n".join(d_lines))
 
     bundle = "\n\n".join(parts)
     if len(bundle) > max_chars:
