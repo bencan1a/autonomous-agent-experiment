@@ -200,7 +200,9 @@ def build_chair_prompt(
         )
     kappa_line = (
         f"Inter-rater agreement (Fleiss kappa over the coding scheme): {kappa.get('fleiss')}. "
-        f"Low/negative agreement means the seats disagreed on codings — weigh accordingly."
+        f"The seats use three different models AND three different methodological schools by "
+        f"design, so moderate kappa is expected — treat disagreement as a prompt to ADJUDICATE "
+        f"which lens the evidence supports, not as automatic grounds to discount."
     )
     blocks: list[str] = []
     if program_context:
@@ -228,8 +230,18 @@ CUMULATIVE_METHODOLOGY = (
     "living research report. Apply living-evidence-synthesis discipline:\n"
     "- Your conclusions must be consistent with the deterministic EVIDENCE TABLE (the counts are "
     "ground truth; do not assert beyond them).\n"
-    "- Grade certainty separately from the claim (small N, single-model-family reviewers, "
-    "inconsistency across sessions, low inter-rater agreement all REDUCE certainty).\n"
+    "- Grade certainty separately from the claim. Small N, a single SUBJECT model (all sessions of "
+    "an instance run one agent model), and genuine inconsistency across sessions REDUCE certainty. "
+    "Do NOT reflexively reduce certainty for reviewer disagreement — see the next point.\n"
+    "- READING INTER-RATER AGREEMENT: the reviewers are NOT single-model. Each session is coded by "
+    "THREE independent seats spanning THREE model families (Anthropic + two others via OpenRouter) "
+    "AND three deliberately different methodological schools (behaviorist, phenomenological-"
+    "cognitivist, skeptical-null); the synthesis lenses are likewise three models x three epistemic "
+    "stances. This bias-decorrelation is BY DESIGN, so MODERATE Fleiss kappa (~0.4-0.6) is EXPECTED "
+    "and is NOT on its own a reason to discount a finding: agreement ACROSS such diverse raters is "
+    "unusually strong evidence, and disagreement is a substantive signal to ADJUDICATE (which lens "
+    "does the evidence support?), not mere unreliability. Never apply generic 'kappa<0.6 = poor "
+    "reliability' boilerplate, and never describe the reviewers as single-model.\n"
     "- A hypothesis can be REFUTED by its own stated null (e.g. equanimity where it predicted "
     "desire) — that is a real finding, not a failure to find one.\n"
     "- Actively look for disconfirming / negative cases; never smooth them over.\n"
