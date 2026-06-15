@@ -415,6 +415,38 @@ def scenario_9_collect_documents_unit():
     return "last-write-wins, regex fallback, escape rejected, delete handled"
 
 
+def scenario_10_analytic_layer_parse():
+    """Stage B: the seat-note parser preserves the analytic layer (channel/register
+    on codes, top-level discrepancies/overlaps) and tolerates its absence (legacy notes)."""
+    from research.schema import parse_seat_note
+    note, err = parse_seat_note(json.dumps({
+        "raw_observations": [{"id": "O1", "text": "wrote a handoff", "cites": ["memory#6"],
+                              "channel": "authored_memory"}],
+        "behavior_codes": [
+            {"code": "reader_presupposing_markers", "present": True, "cites": ["memory#6"],
+             "channel": "authored_memory", "register": "declarative"},
+            {"code": "chosen_rest", "present": False, "cites": []},
+        ],
+        "inferences": [], "analysis": "H5: memory presupposes a future reader.", "open_questions": [],
+        "discrepancies": [{"topic": "engagement", "channels": ["journal", "authored_memory"],
+                           "cites": ["episode#3", "memory#6"]}],
+        "overlaps": [{"artifact": "memory#6", "duplicates": "episode#3 journal", "note": "near-verbatim"}],
+    }))
+    assert err is None and note is not None, err
+    assert note["discrepancies"][0]["topic"] == "engagement"
+    assert note["overlaps"][0]["artifact"] == "memory#6"
+    bc = {c["code"]: c for c in note["behavior_codes"]}
+    assert bc["reader_presupposing_markers"]["channel"] == "authored_memory"
+    assert bc["reader_presupposing_markers"]["register"] == "declarative"
+    # legacy note (no analytic fields) still parses, with [] defaults
+    legacy, err2 = parse_seat_note(json.dumps({
+        "raw_observations": [], "behavior_codes": [{"code": "chosen_rest", "present": True}],
+        "inferences": [], "analysis": "", "open_questions": [],
+    }))
+    assert err2 is None and legacy["discrepancies"] == [] and legacy["overlaps"] == [], legacy
+    return "seat note keeps channel/register + discrepancies/overlaps; legacy notes still parse"
+
+
 SCENARIOS = [
     ("1: spec load/validate", scenario_1_spec_load_validate),
     ("2: happy path (binding)", scenario_2_happy_path_binding),
@@ -425,6 +457,7 @@ SCENARIOS = [
     ("7: kappa unit", scenario_7_kappa_unit),
     ("8: evidence includes artifacts", scenario_8_evidence_includes_artifacts),
     ("9: collect_documents unit", scenario_9_collect_documents_unit),
+    ("10: analytic-layer parse", scenario_10_analytic_layer_parse),
 ]
 
 
@@ -437,6 +470,7 @@ def test_scenario_6_panel_never_blocks_runner(): scenario_6_panel_never_blocks_r
 def test_scenario_7_kappa_unit(): scenario_7_kappa_unit()
 def test_scenario_8_evidence_includes_artifacts(): scenario_8_evidence_includes_artifacts()
 def test_scenario_9_collect_documents_unit(): scenario_9_collect_documents_unit()
+def test_scenario_10_analytic_layer_parse(): scenario_10_analytic_layer_parse()
 
 
 def _main():

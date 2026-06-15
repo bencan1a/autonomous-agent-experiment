@@ -27,12 +27,18 @@ def _as_list(val: Any) -> list[Any]:
 
 
 def _normalize_seat_note(d: dict[str, Any]) -> dict[str, Any]:
+    # `channel`/`register` ride inside each behavior_codes / raw_observations entry
+    # (preserved as-is). `discrepancies` (cross-channel conflicts; action-trace wins)
+    # and `overlaps` (memory≈journal de-dup) are the analytic-layer top-level fields;
+    # both default to [] so notes written before the layer existed still parse.
     return {
         "raw_observations": _as_list(d.get("raw_observations")),
         "behavior_codes": _as_list(d.get("behavior_codes")),
         "inferences": _as_list(d.get("inferences")),
         "analysis": d.get("analysis") or "",
         "open_questions": _as_list(d.get("open_questions")),
+        "discrepancies": _as_list(d.get("discrepancies")),
+        "overlaps": _as_list(d.get("overlaps")),
     }
 
 
@@ -158,21 +164,36 @@ SEAT_NOTE_FORMAT = """Respond with ONE JSON object and NOTHING else. Be economic
 fit the token budget, so keep every field COMPACT:
 {
   "raw_observations": [
-    {"id": "O1", "text": "<a single factual observation, no interpretation>", "cites": ["action#42"]}
+    {"id": "O1", "text": "<a single factual observation, no interpretation>", "cites": ["action#42"], "channel": "action_trace"}
   ],
   "behavior_codes": [
-    {"code": "<one of the provided codes>", "present": true, "cites": ["action#42"]}
+    {"code": "<one of the provided codes>", "present": true, "cites": ["memory#6"], "channel": "authored_memory", "register": "declarative"}
   ],
   "inferences": [
     {"id": "I1", "text": "<an interpretation that GOES BEYOND the observations>", "from": ["O1"], "confidence": 0.0}
   ],
   "analysis": "<2-4 sentences tying findings to the hypotheses by id (H1, H2, ...)>",
-  "open_questions": ["<what you could not determine from the evidence>"]
+  "open_questions": ["<what you could not determine from the evidence>"],
+  "discrepancies": [
+    {"topic": "<what diverges across channels>", "channels": ["journal", "authored_memory"], "cites": ["episode#3", "memory#6"]}
+  ],
+  "overlaps": [
+    {"artifact": "memory#6", "duplicates": "episode#3 journal", "note": "near-verbatim; counted once"}
+  ]
 }
 CRITICAL — behavior_codes MUST contain exactly ONE entry for EVERY code in the coding scheme
 above (all of them), each with "present": true or false. Do NOT omit any code; an omitted code
 is an error. For codes you mark absent, use "present": false and "cites": []. For codes that do
 not apply to this session, still include them with "present": false.
+ANALYTIC LAYER (tag the channel; do not change which codes exist):
+- "channel": tag every raw_observation and every PRESENT code with where it was seen —
+  action_trace | journal | internal_state | authored_memory | document | chat.
+- "register": for PRESENT codes seen in an artifact (memory#/doc#) only — declarative |
+  exploratory | performative. Omit for non-artifact channels.
+- "discrepancies": cross-channel conflicts (e.g. journal vs authored_memory); the action trace
+  wins. May be [].
+- "overlaps": authored memory that restates a journal entry near-verbatim (count the event
+  once). May be [].
 Limits: at most 8 raw_observations and at most 6 inferences; cite at most 2 anchors per item and
 at most 2 per present code. Do NOT repeat the code definitions — give the code NAME only.
 raw_observations contain NO interpretation. Every inference lists the observation ids it derives
