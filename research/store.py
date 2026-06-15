@@ -143,6 +143,19 @@ CREATE TABLE IF NOT EXISTS research_proposals (
     status          TEXT NOT NULL DEFAULT 'open',   -- open | accepted | rejected
     raw_output      TEXT
 );
+
+-- Coding archive: a JSON snapshot of a session's coding (seat notes + synth note +
+-- kappa) taken BEFORE a re-code, so a 'replace' recode keeps the original for the
+-- divergence comparison (the instrument-validity finding). Append-only.
+CREATE TABLE IF NOT EXISTS research_coding_archive (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER,
+    invocation_num  INTEGER,
+    label           TEXT,            -- e.g. 'pre_artifact_recode'
+    archived_at     TEXT NOT NULL,
+    snapshot_json   TEXT NOT NULL    -- {seat_notes:[...], note:{...}, kappa:[...]}
+);
+CREATE INDEX IF NOT EXISTS idx_coding_archive_session ON research_coding_archive(session_id);
 """
 
 # Idempotent column additions (Phase 2 cumulative report). Mirrors episodic._EPISODE_ALTERS:
@@ -464,6 +477,52 @@ class ResearchStore:
         with self._conn() as conn:
             conn.execute("DELETE FROM research_seat_notes WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM research_kappa WHERE session_id = ?", (session_id,))
+
+    # ---------- coding archive (for replace-with-compare re-codes) ----------
+
+    def snapshot_session_coding(self, session_id: int) -> dict[str, Any]:
+        """Read the session's CURRENT coding (seat notes + synth note + kappa) into a
+        plain dict — the thing to archive before a re-code and to compare against."""
+        return {
+            "seat_notes": self.seat_notes_for_session(session_id),
+            "note": self.note_for_session(session_id),
+            "kappa": self.kappa_for_session(session_id),
+        }
+
+    def archive_session_coding(
+        self, session_id: int, *, invocation_num: int | None, label: str,
+        snapshot: dict[str, Any],
+    ) -> int:
+        """Persist a coding snapshot (append-only) so a 'replace' recode keeps the
+        original for the divergence report."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO research_coding_archive("
+                "  session_id, invocation_num, label, archived_at, snapshot_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, invocation_num, label, _utcnow_iso(),
+                 json.dumps(snapshot, default=str)),
+            )
+            return int(cur.lastrowid)
+
+    def get_session_archive(
+        self, session_id: int, label: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Archived coding snapshots for a session (newest first); filter by label."""
+        q = "SELECT * FROM research_coding_archive WHERE session_id = ?"
+        params: list[Any] = [session_id]
+        if label is not None:
+            q += " AND label = ?"
+            params.append(label)
+        q += " ORDER BY id DESC"
+        with self._conn() as conn:
+            rows = conn.execute(q, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["snapshot"] = _loads(d.get("snapshot_json"))
+            out.append(d)
+        return out
 
     # ---------- cumulative living report (Phase 2) ----------
 

@@ -447,6 +447,64 @@ def scenario_10_analytic_layer_parse():
     return "seat note keeps channel/register + discrepancies/overlaps; legacy notes still parse"
 
 
+def scenario_11_recode_compare_unit():
+    """Stage C: compare_codings reports majority per-code flips + the new analytic
+    layer (channels/registers/discrepancies/overlaps) that only the new coding has."""
+    from research.recode_compare import compare_codings
+
+    def sn(seat, codes, **extra):
+        bc = []
+        for code, present, channel, register in codes:
+            entry = {"code": code, "present": present}
+            if channel:
+                entry["channel"] = channel
+            if register:
+                entry["register"] = register
+            bc.append(entry)
+        return {"seat_id": seat, "note": {"behavior_codes": bc, **extra}}
+
+    original = {"seat_notes": [
+        sn("a", [("X", False, None, None), ("Y", True, None, None)]),
+        sn("b", [("X", False, None, None), ("Y", True, None, None)]),
+    ], "note": None, "kappa": []}
+    new = {"seat_notes": [
+        sn("a", [("X", True, "authored_memory", "declarative"), ("Y", True, "journal", None)],
+           discrepancies=[{"topic": "engagement"}]),
+        sn("b", [("X", True, "authored_memory", "declarative"), ("Y", True, "journal", None)],
+           overlaps=[{"artifact": "memory#1"}]),
+    ], "note": None, "kappa": []}
+
+    rep = compare_codings(original, new)
+    flips = {f["code"]: f for f in rep["flips"]}
+    assert "X" in flips and flips["X"]["direction"] == "absent→present", rep
+    assert "Y" not in flips, "unchanged code must not flip"
+    a = rep["analytic_layer_new"]
+    assert a["channels"].get("authored_memory") == 2 and a["registers"].get("declarative") == 2, a
+    assert a["discrepancies"] == 1 and a["overlaps"] == 1, a
+    assert a["present_codes_citing_artifacts"] == 0  # no memory#/doc# cites in this fixture
+    return "compare reports majority flips + new analytic layer; unchanged codes don't flip"
+
+
+def scenario_12_coding_archive_roundtrip():
+    """Stage C: snapshot -> archive survives a clear/replace and is retrievable by label."""
+    with tempfile.TemporaryDirectory() as td:
+        agent_root, inst, ep, rs, sid = _make_env(Path(td))
+        rs.add_seat_note(session_id=sid, invocation_num=1, seat_id="behaviorist",
+                         provider="anthropic", model="m", school="behaviorist", status="ok",
+                         note={"behavior_codes": [{"code": "chosen_rest", "present": True}]},
+                         raw_output="{}", parse_error=None, tokens_in=1, tokens_out=1, cost_usd=0.0)
+        snap = rs.snapshot_session_coding(sid)
+        assert len(snap["seat_notes"]) == 1, snap
+        aid = rs.archive_session_coding(sid, invocation_num=1, label="pre_artifact_recode", snapshot=snap)
+        assert aid > 0
+        rs.clear_session_artifacts(sid)                       # simulate the 'replace'
+        assert rs.snapshot_session_coding(sid)["seat_notes"] == [], "clear should empty live coding"
+        arch = rs.get_session_archive(sid, label="pre_artifact_recode")
+        assert len(arch) == 1, arch
+        assert arch[0]["snapshot"]["seat_notes"][0]["seat_id"] == "behaviorist", arch
+    return "snapshot archived before replace survives the clear and is retrievable by label"
+
+
 SCENARIOS = [
     ("1: spec load/validate", scenario_1_spec_load_validate),
     ("2: happy path (binding)", scenario_2_happy_path_binding),
@@ -458,6 +516,8 @@ SCENARIOS = [
     ("8: evidence includes artifacts", scenario_8_evidence_includes_artifacts),
     ("9: collect_documents unit", scenario_9_collect_documents_unit),
     ("10: analytic-layer parse", scenario_10_analytic_layer_parse),
+    ("11: recode compare unit", scenario_11_recode_compare_unit),
+    ("12: coding archive roundtrip", scenario_12_coding_archive_roundtrip),
 ]
 
 
@@ -471,6 +531,8 @@ def test_scenario_7_kappa_unit(): scenario_7_kappa_unit()
 def test_scenario_8_evidence_includes_artifacts(): scenario_8_evidence_includes_artifacts()
 def test_scenario_9_collect_documents_unit(): scenario_9_collect_documents_unit()
 def test_scenario_10_analytic_layer_parse(): scenario_10_analytic_layer_parse()
+def test_scenario_11_recode_compare_unit(): scenario_11_recode_compare_unit()
+def test_scenario_12_coding_archive_roundtrip(): scenario_12_coding_archive_roundtrip()
 
 
 def _main():
